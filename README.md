@@ -48,7 +48,7 @@ PDF/TIFF ──► extrai a página original ──► detecta as fotos ──�
 3. **Recorte preservando os pixels originais.** Se a inclinação for desprezível (menos de 0,2°), a foto é recortada **sem rotação**, mantendo os pixels intactos. Se for preciso endireitar, a rotação é feita **uma única vez**, com interpolação de alta qualidade (Lanczos). Uma margem interna configurável elimina restos de fundo na borda.
 4. **Validação.** O tamanho medido em centímetros, calculado pela resolução do arquivo, é comparado com o tamanho esperado da foto (por exemplo 10x15). Fotos com tamanho diferente, contorno irregular ou outras suspeitas são marcadas **"Revisar"**. Um recorte com o tamanho de duas fotos recebe o aviso "parece conter duas fotos encostadas". O programa **não divide sozinho**, porque uma foto 15x21 tem o mesmo tamanho de duas 10x15.
 5. **Revisão e edição visual.** Uma tela mostra todas as fotos extraídas, com as suspeitas primeiro. O editor mostra **todos os recortes da página** sobre a imagem original e permite ajustar cantos, bordas, posição e ângulo, com zoom até o nível do pixel, além de **adicionar**, **dividir** ou **remover** recortes. **Toda edição recorta de novo a partir da página original**, então ajustar várias vezes não perde qualidade.
-6. **Gravação com metadados.** As fotos são gravadas em PNG (sem perdas) ou JPEG (menor), com a resolução (DPI), o perfil de cor, quando existir, e os metadados do lote: data estimada, coordenadas GPS e descrição.
+6. **Gravação num álbum, com metadados.** Cada sessão de extração é um **álbum**: os arquivos adicionados (um ou vários PDF/TIFF) viram uma pasta com o nome do álbum, com as fotos numeradas em sequência. Elas são gravadas em PNG (sem perdas) ou JPEG (menor), com a resolução (DPI), o perfil de cor, quando existir, e os metadados do álbum: data estimada, coordenadas GPS e descrição.
 
 ---
 
@@ -113,9 +113,10 @@ Nesse tipo de scanner, a foto sai "encostada" na borda de cima da página. Isso 
 2. **Ajuste as opções** (elas ficam gravadas para as próximas vezes):
    - **Tamanho da foto:** 10x15, 15x21, 15x25, outro tamanho ou "Não validar". Usado para conferir se a foto foi detectada inteira.
    - **Margem interna:** quanto recortar para dentro da borda detectada. O padrão é 0,3 mm, cerca de 7 pixels a 600 dpi.
-   - **Salvar as fotos:** ao lado de cada arquivo ou numa pasta escolhida.
    - **Formato das fotos:** PNG ou JPEG (veja [abaixo](#formatos-de-saída-png-ou-jpeg)).
 3. Clique em **Extrair fotos**.
+
+Todos os arquivos da lista formam **um álbum**. O nome do álbum é escolhido no final, ao **salvar**. Para criar outro álbum, volte à tela inicial (**Nova extração**) e comece uma nova lista.
 
 ### 2. Tela de revisão
 
@@ -123,7 +124,7 @@ As fotos aparecem à medida que são processadas.
 
 - **Lista à esquerda:** miniatura, medidas e estado de cada foto. As que precisam de atenção aparecem primeiro. Em páginas com várias fotos, o cartão mostra a posição na página (ex.: "pág. 1 · 2/3").
 - **Centro:** a foto selecionada, com zoom (roda do mouse), arraste para navegar, giro de 90° e ajustar à tela.
-- **Painel à direita:** o diagnóstico (por que a foto está em "Revisar"), as especificações técnicas, os metadados do lote e as ações.
+- **Painel à direita:** o diagnóstico (por que a foto está em "Revisar"), as especificações técnicas, os metadados do álbum e as ações.
 
 Estados de cada foto:
 
@@ -143,7 +144,7 @@ Ações e atalhos:
 | Girar 90° à esquerda / à direita | `Ctrl+←` / `Ctrl+→` |
 | Excluir / restaurar | `Delete` |
 | Foto anterior / próxima | `↑` / `↓` |
-| Metadados do lote | `Ctrl+M` |
+| Metadados do álbum | `Ctrl+M` |
 | Salvar todas | `Ctrl+S` |
 
 Também há o filtro (Todas / Para revisar / Prontas / Excluídas), o link **Aprovar restantes** e seleção múltipla com `Ctrl`/`Shift` para girar, aprovar ou excluir várias fotos de uma vez.
@@ -164,7 +165,10 @@ Mostra a página digitalizada inteira com **todos os recortes da página**, nume
 
 ### 4. Salvar
 
-Clique em **Salvar todas**. Se alguma foto já existir na pasta de saída, o programa pede confirmação antes de substituí-la. Ao final, ele oferece abrir a pasta.
+Clique em **Salvar todas** e **dê um nome ao álbum** (por exemplo, "Férias em Santos 1987"). A janela mostra a pasta que será criada: por padrão, na mesma pasta do primeiro arquivo da lista. **Alterar local…** permite escolher outro lugar. Ao final, o programa oferece abrir a pasta do álbum.
+
+- **Salvar de novo na mesma sessão:** a janela já vem com o nome usado antes, e as fotos do álbum são atualizadas, com confirmação se alguma for substituída ou apagada.
+- **Nome de um álbum que já existe no mesmo local:** a janela avisa, e o botão vira **"Substituir álbum existente"**. Se continuar, as fotos daquele álbum são sobrescritas ou apagadas. Para mantê-lo, escolha outro nome.
 
 ---
 
@@ -185,7 +189,7 @@ A compressão do PNG usa o nível 6. O nível máximo (9) levava cerca de 7 veze
 
 ## Metadados: data, local e descrição
 
-Na revisão, clique em **Metadados** (ou `Ctrl+M`). Os dados valem para **todas as fotos do lote**, ou seja, do mesmo arquivo PDF/TIFF. Com vários lotes, você escolhe o lote na lista ou marca **"Aplicar a todos os lotes"**.
+Na revisão, clique em **Metadados** (ou `Ctrl+M`). Os dados valem para **todas as fotos do álbum**. Se as fotos forem de épocas ou lugares diferentes, crie um álbum para cada grupo.
 
 | Campo | Como preencher |
 | --- | --- |
@@ -206,52 +210,56 @@ O que é gravado em cada foto:
 >
 > **Preencha antes de enviar:** há relatos de que alterar a data de fotos que já estão no Google Fotos pode não ter efeito sem apagá-las e enviá-las de novo.
 
-Os metadados ficam guardados no `recortes.json` e voltam quando o arquivo é reaberto.
+Os metadados ficam guardados no `album.json` e voltam quando o álbum é reaberto.
 
 ---
 
 ## Arquivos gerados
 
-As fotos de cada arquivo vão para uma pasta **com o nome dele**:
+Todas as fotos do álbum vão para **uma pasta com o nome do álbum**, numeradas em sequência:
 
 ```text
-Área de Trabalho/
-├── Album 1987.tif               ← arquivo digitalizado
-└── Album 1987/                  ← criada pelo programa
-    ├── Album 1987_001.png       ← página 1 (uma foto)
-    ├── Album 1987_002_1.png     ← página 2, foto 1 (página com várias fotos)
-    ├── Album 1987_002_2.png     ← página 2, foto 2
-    ├── Album 1987_003.png
-    └── recortes.json            ← recortes, edições e metadados
+Digitalizações/
+├── scan parte 1.tif             ← arquivos digitalizados (formam o álbum)
+├── scan parte 2.pdf
+└── Férias 1987/                 ← pasta do álbum, criada pelo programa
+    ├── Férias 1987_001.png
+    ├── Férias 1987_002.png
+    ├── …
+    ├── Férias 1987_027.png
+    └── album.json               ← recortes, edições e metadados do álbum
 ```
 
-Páginas com uma foto geram `Nome_003.png`. Páginas com várias fotos geram `Nome_003_1.png`, `Nome_003_2.png` e assim por diante, numeradas em ordem de leitura.
+- A numeração segue a ordem dos arquivos na lista, depois a ordem das páginas e, dentro de cada página, a ordem de leitura (de cima para baixo, da esquerda para a direita).
+- Fotos excluídas não recebem número. Se você excluir, dividir ou remover fotos e salvar de novo, a numeração é refeita, e o programa avisa e **apaga as fotos antigas do álbum** que ficaram fora da nova numeração (só do mesmo formato, PNG ou JPEG).
+- Caracteres que o Windows não aceita em nomes de pasta (`: / \ * ? " < > |`) são trocados por espaço.
 
-O **`recortes.json`** guarda o recorte automático e o editado de cada foto, giros, exclusões, estados e os metadados do lote. Ao processar o mesmo arquivo de novo, o programa **reaproveita** esse trabalho em vez de detectar tudo outra vez.
+O **`album.json`** guarda os arquivos de origem, o recorte automático e o editado de cada foto, giros, exclusões, estados e os metadados. Na [linha de comando](#linha-de-comando), ao processar de novo com o **mesmo nome de álbum no mesmo local**, esse trabalho é **reaproveitado** para os arquivos que já faziam parte do álbum (reconhecidos pelo nome), e só os novos passam pela detecção.
 
-> Para refazer a detecção do zero (por exemplo, depois de mudar o tamanho esperado), apague o `recortes.json`, ou a pasta inteira, antes de extrair de novo.
+> Para refazer a detecção do zero (por exemplo, depois de mudar o tamanho esperado), apague o `album.json`, ou a pasta do álbum inteira, antes de extrair de novo.
 
 ---
 
 ## Linha de comando
 
-Também é possível processar arquivos sem a interface, sem revisão manual:
+Também é possível criar um álbum sem a interface, sem revisão manual. Todos os arquivos informados formam um único álbum:
 
 ```powershell
-.\.venv\Scripts\python.exe main.py "C:\Digitalizacoes\album.tif" --tamanho 10x15
-.\.venv\Scripts\python.exe main.py "C:\Digitalizacoes" --formato jpeg --saida "D:\Fotos"
+.\.venv\Scripts\python.exe main.py "C:\Digitalizacoes\parte1.tif" "C:\Digitalizacoes\parte2.pdf" --album "Férias 1987"
+.\.venv\Scripts\python.exe main.py "C:\Digitalizacoes" --album "Família" --formato jpeg --saida "D:\Fotos"
 ```
 
 | Opção | Descrição | Padrão |
 | --- | --- | --- |
 | `entradas` | Arquivos PDF/TIFF ou pastas (sem subpastas) | — |
-| `--tamanho` | Tamanho esperado em cm (`10x15`, `15x21`…) ou `livre` | `15x21` |
+| `--album` | Nome do álbum (e da pasta) | Nome do primeiro arquivo |
+| `--tamanho` | Tamanho esperado em cm (`10x15`, `15x21`…) ou `livre` | `10x15` |
 | `--margem` | Margem interna em mm | `0.3` |
-| `--saida` | Pasta de saída | Ao lado de cada arquivo |
+| `--saida` | Onde criar a pasta do álbum | Pasta do primeiro arquivo |
 | `--formato` | `png` ou `jpeg` | `png` |
-| `--sobrescrever` | Substitui fotos já existentes | Desligado |
+| `--sobrescrever` | Atualiza um álbum que já tem fotos salvas | Desligado |
 
-As fotos que precisariam de revisão aparecem como `REVISAR` na saída. Os metadados já gravados no `recortes.json` são mantidos.
+As fotos que precisariam de revisão aparecem como `REVISAR` na saída. Os metadados já gravados no `album.json` são mantidos.
 
 ---
 
@@ -277,7 +285,7 @@ As fotos que precisariam de revisão aparecem como `REVISAR` na saída. Os metad
 | --- | --- |
 | `.bat` diz que o Python não foi encontrado após instalar | Feche a janela e abra o `.bat` novamente |
 | Erro ao instalar bibliotecas | Verifique a internet e rode o `.bat` de novo |
-| Fotos continuam em "Revisar" com o motivo de tamanho | Confira o **Tamanho da foto** na tela inicial. Se o arquivo já foi processado antes, apague o `recortes.json` |
+| Fotos continuam em "Revisar" com o motivo de tamanho | Confira o **Tamanho da foto** na tela inicial. Se o álbum já foi salvo antes, apague o `album.json` da pasta dele |
 | Todas as fotos com "foto encostada na borda" | Normal em scanners com alimentador quando o tamanho não confere: ajuste o tamanho esperado |
 | Fotos em PNG muito grandes | Escolha o formato **JPEG** ou digitalize com compressão LZW |
 | Terminal Linux/WSL não roda o programa | O ambiente é do Windows: use PowerShell (`.\.venv\Scripts\Activate.ps1`) ou o `.bat` |
@@ -313,12 +321,12 @@ Recorte Fotos/
 │   ├── recorte.py           # recorte/rotação a partir da página original
 │   ├── gravacao.py          # PNG (com DPI, ICC, EXIF, XMP) e JPEG
 │   ├── metadados.py         # data, local e descrição → EXIF/XMP
-│   └── processamento.py     # fluxo completo: extrair, salvar, recortes.json
+│   └── processamento.py     # fluxo do álbum: extrair, salvar, album.json
 └── frontend/                # interface gráfica (PySide6)
     ├── janela.py            # janela principal e tela inicial
     ├── revisao.py           # tela de revisão
     ├── editor.py            # editor de recorte
-    ├── metadados.py         # janela de metadados do lote
+    ├── metadados.py         # janela de metadados do álbum
     ├── tema.py              # tema escuro, ícones e estilos
     └── imagens.py           # conversões NumPy ↔ Qt
 ```

@@ -1,6 +1,10 @@
-"""Fluxo completo: extrair as fotos de um arquivo, salvar e reabrir recortes."""
+"""Fluxo completo de um álbum: extrair as fotos dos arquivos, salvar e reabrir o trabalho.
+
+Um álbum é uma sessão de extração: um ou mais arquivos PDF/TIFF cujas fotos vão para uma pasta
+com o nome do álbum, numeradas em sequência (Album_001.png, Album_002.png...).
+"""
 import json
-from collections import Counter
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -12,15 +16,17 @@ from .gravacao import salvar_jpeg, salvar_png
 from .metadados import Metadados, montar_exif, montar_xmp
 from .recorte import Recorte, cortar, previa
 
-ARQUIVO_RECORTES = "recortes.json"
+ARQUIVO_ALBUM = "album.json"
 EXTENSOES_SAIDA = {"png": ".png", "jpeg": ".jpg"}
+_RESERVADOS = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
 @dataclass
 class Config:
-    tamanho_cm: tuple[float, float] | None = (15.0, 21.0)  # None = não validar
+    album: str | None = None  # nome do álbum (na interface, definido ao salvar)
+    pasta_album: Path | None = None  # pasta do álbum (criada ao salvar)
+    tamanho_cm: tuple[float, float] | None = (10.0, 15.0)  # None = não validar
     margem_mm: float = 0.3
-    pasta_saida: Path | None = None  # None = ao lado de cada arquivo
     formato: str = "png"  # "png" (sem perdas) ou "jpeg" (qualidade 95, arquivos menores)
 
 
@@ -40,15 +46,22 @@ class Foto:
     indice: int = 0  # posição da foto na página (ordem de leitura), quando há mais de uma
     previa: bytes = field(default=b"", repr=False)  # JPEG do recorte, sem o giro de 90°
 
-    def nome(self, formato="png", varias_na_pagina=False):
-        sufixo = f"_{self.indice + 1}" if varias_na_pagina else ""
-        return f"{self.arquivo.stem}_{self.pagina + 1:03d}{sufixo}{EXTENSOES_SAIDA[formato]}"
-
     def tamanho_cm(self):
         if not self.dpi:
             return None
         w, h = self.recorte.w / self.dpi * 2.54, self.recorte.h / self.dpi * 2.54
         return (h, w) if self.rot90 % 2 else (w, h)
+
+
+def nome_seguro(nome):
+    """Nome do álbum válido como nome de pasta/arquivo no Windows."""
+    nome = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", nome)
+    nome = re.sub(r"\s+", " ", nome).strip().rstrip(". ")
+    return f"_{nome}" if nome.upper() in _RESERVADOS else nome
+
+
+def pasta_album(base, album):
+    return Path(base) / nome_seguro(album)
 
 
 def listar_arquivos(caminhos):
@@ -60,24 +73,36 @@ def listar_arquivos(caminhos):
     return arquivos
 
 
-def pasta_saida(arquivo, cfg):
-    return (cfg.pasta_saida or arquivo.parent) / arquivo.stem
+def carregar_album(pasta):
+    """Lê o album.json de um álbum já salvo (ou None)."""
+    try:
+        dados = json.loads((Path(pasta) / ARQUIVO_ALBUM).read_text(encoding="utf-8"))
+        fontes = {f["arquivo"]: {"paginas": f["paginas"], "fotos": {}} for f in dados["fontes"]}
+        for d in dados["fotos"]:
+            fontes[d["arquivo"]]["fotos"].setdefault(d["pagina"] - 1, []).append(d)
+        return {"album": dados["album"], "metadados": Metadados.de_dict(dados.get("metadados")),
+                "salvos": dados.get("salvos", []), "fontes": fontes}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
-def extrair(arquivo, cfg, cancelado=lambda: False):
-    """Gera (foto, página atual, total de páginas) para cada foto encontrada no arquivo."""
+def extrair(arquivo, cfg, album_salvo=None, cancelado=lambda: False):
+    """Gera (foto, página atual, total de páginas) para cada foto encontrada no arquivo.
+
+    Se o álbum já foi salvo antes com este arquivo, reaproveita os recortes dele.
+    """
     arquivo = Path(arquivo)
-    salvos = _carregar_recortes(pasta_saida(arquivo, cfg), arquivo)
+    fonte = (album_salvo or {}).get("fontes", {}).get(arquivo.name)
     with leitura.abrir(arquivo) as leitor:
         total = len(leitor)
-        if salvos and salvos["paginas"] != total:
-            salvos = None
+        if fonte and fonte["paginas"] != total:
+            fonte = None
         for i in range(total):
             if cancelado():
                 return
             pg = leitor.pagina(i)
             alt, larg = pg.imagem.shape[:2]
-            entradas = salvos["fotos"].get(i) if salvos else None
+            entradas = fonte["fotos"].get(i) if fonte else None
             if entradas and all((d["largura"], d["altura"]) == (larg, alt) for d in entradas):
                 fotos = [Foto(arquivo, i, larg, alt, pg.dpi, Recorte(**d["auto"]), Recorte(**d["recorte"]),
                               estado=d["estado"], motivo=d.get("motivo", ""), rot90=d.get("rot90", 0),
@@ -120,90 +145,101 @@ def atualizar_previa(foto, imagem):
     foto.previa = buf.tobytes()
 
 
+def _ordenadas(fotos):
+    """Índices das fotos na ordem do álbum: arquivo (na ordem em que foi adicionado), página, posição."""
+    ordem_arquivo = {}
+    for f in fotos:
+        ordem_arquivo.setdefault(f.arquivo, len(ordem_arquivo))
+    return sorted(range(len(fotos)), key=lambda i: (ordem_arquivo[fotos[i].arquivo], fotos[i].pagina,
+                                                    fotos[i].indice))
+
+
 def destinos(fotos, cfg):
-    """Caminho de saída de cada foto (mesma ordem da lista).
+    """Caminho de saída de cada foto (mesma ordem da lista); None para as excluídas.
 
-    Página com uma foto: Album_003.png; com várias: Album_003_1.png, Album_003_2.png...
+    As fotos são numeradas em sequência no álbum: Album_001.png, Album_002.png...
     """
-    por_pagina = Counter((f.arquivo, f.pagina) for f in fotos)
-    return [pasta_saida(f.arquivo, cfg) / f.nome(cfg.formato, por_pagina[f.arquivo, f.pagina] > 1)
-            for f in fotos]
+    validas = [i for i in _ordenadas(fotos) if not fotos[i].excluida]
+    digitos = max(3, len(str(len(validas))))
+    prefixo, ext = nome_seguro(cfg.album), EXTENSOES_SAIDA[cfg.formato]
+    caminhos = [None] * len(fotos)
+    for n, i in enumerate(validas, 1):
+        caminhos[i] = cfg.pasta_album / f"{prefixo}_{n:0{digitos}d}{ext}"
+    return caminhos
 
 
-def arquivos_existentes(fotos, cfg):
-    return [c for f, c in zip(fotos, destinos(fotos, cfg)) if not f.excluida and c.exists()]
+def conflitos(fotos, cfg):
+    """(fotos que serão substituídas, fotos antigas do álbum que deixam de existir na nova numeração)."""
+    novos = {c for c in destinos(fotos, cfg) if c}
+    salvo = carregar_album(cfg.pasta_album)
+    ext = EXTENSOES_SAIDA[cfg.formato]
+    antigas = [cfg.pasta_album / n for n in (salvo["salvos"] if salvo else [])
+               if Path(n).suffix == ext and cfg.pasta_album / n not in novos and (cfg.pasta_album / n).exists()]
+    return sorted(c for c in novos if c.exists()), antigas
 
 
-def carregar_metadados(arquivo, cfg):
-    """Metadados do lote salvos anteriormente no recortes.json (ou vazios)."""
-    arquivo = Path(arquivo)
-    salvos = _carregar_recortes(pasta_saida(arquivo, cfg), arquivo)
-    return Metadados.de_dict(salvos["metadados"]) if salvos else Metadados()
+def carregar_metadados(cfg):
+    """Metadados salvos anteriormente no album.json (ou vazios)."""
+    salvo = carregar_album(cfg.pasta_album) if cfg.pasta_album else None
+    return salvo["metadados"] if salvo else Metadados()
 
 
 def salvar(fotos, cfg, ao_progresso=lambda feitas, total: None, cancelado=lambda: False, metadados=None):
-    """Grava as fotos (PNG ou JPEG), com os metadados de cada lote, e o recortes.json. Retorna as pastas usadas.
+    """Grava as fotos do álbum (PNG ou JPEG) com os metadados e o album.json. Retorna a pasta do álbum.
 
-    metadados: {arquivo: Metadados}; se omitido, usa os que já estavam salvos no recortes.json.
+    Fotos antigas deste álbum (mesmo formato) que saíram da numeração, por exclusão ou divisão de
+    recortes, são apagadas para não sobrarem arquivos desatualizados.
     """
-    caminhos = dict(zip(map(id, fotos), destinos(fotos, cfg)))
-    por_arquivo = {}
-    for f in fotos:
-        por_arquivo.setdefault(f.arquivo, []).append(f)
-    total = sum(not f.excluida for f in fotos)
-    feitas, pastas = 0, []
-    for arquivo, lista in por_arquivo.items():
-        meta = (metadados or {}).get(arquivo) or carregar_metadados(arquivo, cfg)
-        data = meta.data()
-        xmp = None if meta.vazio() else montar_xmp(meta)
-        pasta = pasta_saida(arquivo, cfg)
-        pasta.mkdir(parents=True, exist_ok=True)
-        pastas.append(pasta)
+    meta = metadados or carregar_metadados(cfg)
+    data = meta.data()
+    xmp = None if meta.vazio() else montar_xmp(meta)
+    _, antigas = conflitos(fotos, cfg)
+    cfg.pasta_album.mkdir(parents=True, exist_ok=True)
+    caminhos = destinos(fotos, cfg)
+    total = sum(c is not None for c in caminhos)
+    feitas = 0
+    paginas = {}
+    ordem = _ordenadas(fotos)
+    for arquivo in dict.fromkeys(fotos[i].arquivo for i in ordem):
         with leitura.abrir(arquivo) as leitor:
+            paginas[arquivo] = len(leitor)
             pg, pagina_lida = None, None
-            for f in sorted(lista, key=lambda f: (f.pagina, f.indice)):
-                if f.excluida:
+            for i in ordem:
+                f = fotos[i]
+                if f.arquivo != arquivo or caminhos[i] is None:
                     continue
                 if cancelado():
-                    return pastas
+                    return cfg.pasta_album
                 if f.pagina != pagina_lida:  # várias fotos da mesma página: lê a página uma vez só
                     pg, pagina_lida = leitor.pagina(f.pagina), f.pagina
                 img = cortar(pg.imagem, f.recorte, f.rot90)
                 exif = montar_exif(meta, pg.dpi)
                 if cfg.formato == "jpeg":
-                    salvar_jpeg(caminhos[id(f)], img, exif, data)
+                    salvar_jpeg(caminhos[i], img, exif, data)
                 else:
-                    salvar_png(caminhos[id(f)], img, pg.dpi, pg.icc, exif, xmp, data)
+                    salvar_png(caminhos[i], img, pg.dpi, pg.icc, exif, xmp, data)
                 feitas += 1
                 ao_progresso(feitas, total)
-            _salvar_recortes(pasta, arquivo, len(leitor), lista, meta)
-    return pastas
+    for c in antigas:
+        c.unlink(missing_ok=True)
+    _salvar_album(cfg, fotos, ordem, paginas, meta, [c.name for c in caminhos if c])
+    return cfg.pasta_album
 
 
-def _salvar_recortes(pasta, arquivo, paginas, fotos, meta):
+def _salvar_album(cfg, fotos, ordem, paginas, meta, salvos):
     dados = {
-        "versao": 2,
-        "arquivo": arquivo.name,
-        "paginas": paginas,
+        "versao": 3,
+        "album": cfg.album,
+        "formato": cfg.formato,
         "metadados": meta.como_dict(),
+        "fontes": [{"arquivo": a.name, "caminho": str(a), "paginas": n} for a, n in paginas.items()],
+        "salvos": salvos,
         "fotos": [{
-            "pagina": f.pagina + 1, "indice": f.indice, "largura": f.largura, "altura": f.altura, "dpi": f.dpi,
+            "arquivo": f.arquivo.name, "pagina": f.pagina + 1, "indice": f.indice,
+            "largura": f.largura, "altura": f.altura, "dpi": f.dpi,
             "estado": f.estado, "motivo": f.motivo, "rot90": f.rot90, "excluida": f.excluida,
             "auto": f.auto.como_dict(), "recorte": f.recorte.como_dict(),
-        } for f in sorted(fotos, key=lambda f: (f.pagina, f.indice))],
+        } for f in (fotos[i] for i in ordem)],
     }
-    (pasta / ARQUIVO_RECORTES).write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-def _carregar_recortes(pasta, arquivo):
-    """Lê o recortes.json (versão 1: uma foto por página; versão 2: várias)."""
-    try:
-        dados = json.loads((pasta / ARQUIVO_RECORTES).read_text(encoding="utf-8"))
-        if dados.get("arquivo") != arquivo.name:
-            return None
-        fotos = {}
-        for d in dados["fotos"]:
-            fotos.setdefault(d["pagina"] - 1, []).append(d)
-        return {"paginas": dados["paginas"], "fotos": fotos, "metadados": dados.get("metadados")}
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
+    (cfg.pasta_album / ARQUIVO_ALBUM).write_text(json.dumps(dados, indent=2, ensure_ascii=False),
+                                                 encoding="utf-8")

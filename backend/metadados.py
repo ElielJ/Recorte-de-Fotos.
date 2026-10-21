@@ -1,4 +1,4 @@
-"""Metadados do lote (data estimada, local, descrição) em EXIF e XMP.
+"""Metadados do álbum (data estimada, local, descrição) em EXIF e XMP.
 
 O Google Fotos e outros organizadores usam principalmente o EXIF DateTimeOriginal
 e as coordenadas GPS para colocar a foto na data e no lugar certos.

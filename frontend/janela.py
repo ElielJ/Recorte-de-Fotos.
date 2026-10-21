@@ -4,11 +4,12 @@ import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt, Signal
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout,
-                               QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
+                               QGridLayout,
+                               QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
                                QMessageBox, QStackedWidget, QVBoxLayout, QWidget)
 
-from backend.processamento import Config, listar_arquivos, pasta_saida
+from backend.processamento import Config, listar_arquivos
 from . import tema
 from .revisao import TelaRevisao
 
@@ -60,7 +61,7 @@ class LinhaArquivo(QFrame):
 
 
 class TelaInicial(QWidget):
-    extrair = Signal(list, object)
+    extrair = Signal(list, object, object)  # arquivos, Config, local onde criar a pasta do álbum
 
     def __init__(self):
         super().__init__()
@@ -122,7 +123,7 @@ class TelaInicial(QWidget):
         cab_lista = QHBoxLayout()
         ic_l = QLabel()
         ic_l.setPixmap(tema.icone("camadas", "#60a5fa", 14).pixmap(14, 14))
-        sec = QLabel("ARQUIVOS PARA EXTRAIR")
+        sec = QLabel("ARQUIVOS DO ÁLBUM")
         sec.setObjectName("secao")
         self.lbl_qtd = QLabel("0")
         self.lbl_qtd.setObjectName("contagem")
@@ -160,12 +161,6 @@ class TelaInicial(QWidget):
         self.tamanho.currentIndexChanged.connect(lambda: self.outro.setVisible(self.tamanho.currentData() == "outro"))
         self.margem = QDoubleSpinBox(minimum=0, maximum=5, decimals=2, singleStep=0.1, suffix=" mm")
         self.margem.setToolTip("Quanto recortar para dentro da borda detectada, para não sobrar fundo do scanner.")
-        self.destino = QComboBox()
-        self.destino.addItems(["Ao lado de cada arquivo", "Na pasta escolhida"])
-        self.pasta = QLineEdit(readOnly=True, placeholderText="Escolha a pasta de saída")
-        self.btn_pasta = tema.botao("Escolher…", "pasta", cor_icone="#60a5fa")
-        self.btn_pasta.clicked.connect(self._escolher_saida)
-        self.destino.currentIndexChanged.connect(self._atualizar_destino)
 
         opcoes = QFrame()
         opcoes.setObjectName("caixa")
@@ -173,20 +168,12 @@ class TelaInicial(QWidget):
         lop.setContentsMargins(16, 14, 16, 14)
         lop.setHorizontalSpacing(14)
         lop.setVerticalSpacing(6)
-        for col, (rotulo, w) in enumerate((("Tamanho da foto", self.tamanho), ("Margem interna", self.margem),
-                                           ("Salvar as fotos", self.destino))):
+        for col, (rotulo, w) in enumerate((("Tamanho da foto", self.tamanho), ("Margem interna", self.margem))):
             r = QLabel(rotulo)
             r.setObjectName("subtitulo")
             lop.addWidget(r, 0, col)
             lop.addWidget(w, 1, col)
         lop.addWidget(self.outro, 2, 0)
-        linha_pasta = QHBoxLayout()
-        linha_pasta.addWidget(self.pasta, 1)
-        linha_pasta.addWidget(self.btn_pasta)
-        self.linha_pasta = QWidget()
-        self.linha_pasta.setLayout(linha_pasta)
-        linha_pasta.setContentsMargins(0, 0, 0, 0)
-        lop.addWidget(self.linha_pasta, 2, 1, 1, 2)
         # Formato de saída: dois botões exclusivos e a explicação do escolhido logo abaixo.
         rot_formato = QLabel("Formato das fotos")
         rot_formato.setObjectName("subtitulo")
@@ -203,15 +190,16 @@ class TelaInicial(QWidget):
         self.grupo_formato.buttonToggled.connect(self._atualizar_formato)
         self.explicacao = QLabel(textFormat=Qt.RichText, wordWrap=True)
         self.explicacao.setObjectName("explicacao")
-        lop.addWidget(rot_formato, 3, 0, 1, 3)
-        lop.addLayout(linha_formato, 4, 0, 1, 3)
-        lop.addWidget(self.explicacao, 5, 0, 1, 3)
+        lop.addWidget(rot_formato, 3, 0, 1, 2)
+        lop.addLayout(linha_formato, 4, 0, 1, 2)
+        lop.addWidget(self.explicacao, 5, 0, 1, 2)
 
         # Rodapé
         rodape = QHBoxLayout()
         info = QLabel()
         info.setPixmap(tema.icone("info", "#60a5fa", 14).pixmap(14, 14))
-        nota = QLabel("As fotos de cada arquivo vão para uma pasta com o nome dele.")
+        nota = QLabel("Os arquivos desta lista formam um álbum. Ao salvar as fotos, você dá um nome a ele e elas "
+                      "vão para uma pasta com esse nome.")
         nota.setObjectName("subtitulo")
         self.btn_extrair = tema.botao("Extrair fotos", "crop", "primario", "white")
         self.btn_extrair.setIconSize(QSize(16, 16))
@@ -306,20 +294,12 @@ class TelaInicial(QWidget):
 
     # ---------------- opções ----------------
 
-    def _escolher_saida(self):
-        pasta = QFileDialog.getExistingDirectory(self, "Pasta de saída", self.pasta.text())
-        if pasta:
-            self.pasta.setText(pasta)
-
     def formato(self):
         b = self.grupo_formato.checkedButton()
         return b.property("formato") if b else "png"
 
     def _atualizar_formato(self):
         self.explicacao.setText(FORMATOS[self.formato()][1])
-
-    def _atualizar_destino(self):
-        self.linha_pasta.setVisible(self.destino.currentIndex() == 1)
 
     def _carregar_opcoes(self):
         c = self.config
@@ -328,19 +308,15 @@ class TelaInicial(QWidget):
         self.larg.setValue(float(c.value("larg", 10)))
         self.alt.setValue(float(c.value("alt", 15)))
         self.margem.setValue(float(c.value("margem", 0.3)))
-        self.destino.setCurrentIndex(int(c.value("destino", 0)))
-        self.pasta.setText(c.value("pasta", ""))
         formato = c.value("formato", "png")
         botoes = self.grupo_formato.buttons()
         (next((b for b in botoes if b.property("formato") == formato), botoes[0])).setChecked(True)
         self._atualizar_formato()
         self.outro.setVisible(self.tamanho.currentData() == "outro")
-        self._atualizar_destino()
 
     def _salvar_opcoes(self):
         for chave, valor in (("tamanho_texto", self.tamanho.currentText()), ("larg", self.larg.value()),
                              ("alt", self.alt.value()), ("margem", self.margem.value()),
-                             ("destino", self.destino.currentIndex()), ("pasta", self.pasta.text()),
                              ("formato", self.formato())):
             self.config.setValue(chave, valor)
 
@@ -348,26 +324,22 @@ class TelaInicial(QWidget):
         tamanho = self.tamanho.currentData()
         if tamanho == "outro":
             tamanho = (self.larg.value(), self.alt.value())
-        saida = None
-        if self.destino.currentIndex() == 1:
-            if not self.pasta.text():
-                QMessageBox.warning(self, "Pasta de saída", "Escolha a pasta onde as fotos serão salvas.")
-                return
-            saida = Path(self.pasta.text())
-        cfg = Config(tamanho, self.margem.value(), saida, self.formato())
         arquivos = self.arquivos()
-        # Dois arquivos com o mesmo nome (ex.: album.pdf e album.tiff) iriam para a mesma pasta.
-        pastas = {}
+        base = arquivos[0].parent  # local sugerido para o álbum; pode ser alterado ao salvar
+        # O album.json identifica cada arquivo pelo nome: dois arquivos com o mesmo nome se confundiriam.
+        nomes = {}
         for a in arquivos:
-            pastas.setdefault(str(pasta_saida(a, cfg)).lower(), []).append(a.name)
-        repetidos = [n for n in pastas.values() if len(n) > 1]
+            nomes.setdefault(a.name.lower(), []).append(str(a))
+        repetidos = [c for c in nomes.values() if len(c) > 1]
         if repetidos:
             QMessageBox.warning(self, "Nomes repetidos",
-                                "Estes arquivos gerariam a mesma pasta de saída. Renomeie um deles ou "
-                                "processe-os separadamente:\n\n" + "\n".join(" e ".join(n) for n in repetidos))
+                                "Um álbum não pode ter dois arquivos com o mesmo nome. Renomeie um deles:\n\n"
+                                + "\n\n".join("\n".join(c) for c in repetidos))
             return
+        # O nome do álbum é escolhido ao salvar; aqui só seguem o local e as opções.
+        cfg = Config(None, None, tamanho, self.margem.value(), self.formato())
         self._salvar_opcoes()
-        self.extrair.emit(arquivos, cfg)
+        self.extrair.emit(arquivos, cfg, base)
 
 
 class JanelaPrincipal(QMainWindow):
@@ -385,9 +357,9 @@ class JanelaPrincipal(QMainWindow):
         self.inicial.extrair.connect(self._iniciar)
         self.revisao.voltar.connect(self._voltar)
 
-    def _iniciar(self, arquivos, cfg):
+    def _iniciar(self, arquivos, cfg, base):
         self.telas.setCurrentWidget(self.revisao)
-        self.revisao.iniciar(arquivos, cfg)
+        self.revisao.iniciar(arquivos, cfg, base)
 
     def _pode_descartar(self):
         if self.revisao.extraindo() or self.revisao.alterado:

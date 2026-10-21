@@ -10,7 +10,9 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFrame, QGraphi
                                QMessageBox, QProgressBar, QProgressDialog, QVBoxLayout, QWidget)
 
 from backend import processamento
+from backend.metadados import Metadados
 from . import tema
+from .album import DialogoAlbum
 from .editor import EditorRecorte
 from .imagens import pixmap_da_previa
 from .metadados import DialogoMetadados
@@ -20,7 +22,7 @@ DIAGNOSTICO = {
     "revisar": ("alerta", "Atenção ao recorte"),
     "ok": ("ok", "Recorte automático OK"),
     "editado": ("lapis", "Recorte ajustado manualmente"),
-    "excluida": ("lixeira", "Foto excluída do lote"),
+    "excluida": ("lixeira", "Foto excluída do álbum"),
 }
 
 
@@ -33,15 +35,16 @@ class ExtracaoThread(QThread):
     progresso = Signal(int, str)  # milésimos, texto
     erro = Signal(str, str)
 
-    def __init__(self, arquivos, cfg):
+    def __init__(self, arquivos, cfg, album_salvo):
         super().__init__()
-        self.arquivos, self.cfg, self.cancelar = arquivos, cfg, False
+        self.arquivos, self.cfg, self.album_salvo, self.cancelar = arquivos, cfg, album_salvo, False
 
     def run(self):
         n = len(self.arquivos)
         for k, arquivo in enumerate(self.arquivos):
             try:
-                for foto, i, total in processamento.extrair(arquivo, self.cfg, lambda: self.cancelar):
+                for foto, i, total in processamento.extrair(arquivo, self.cfg, self.album_salvo,
+                                                                 lambda: self.cancelar):
                     self.foto_pronta.emit(foto)
                     self.progresso.emit(int(1000 * (k + i / total) / n),
                                         f"{arquivo.name}: página {i} de {total} (arquivo {k + 1} de {n})")
@@ -58,11 +61,11 @@ class SalvarThread(QThread):
 
     def __init__(self, fotos, cfg, metadados):
         super().__init__()
-        self.fotos, self.cfg, self.metadados, self.cancelar, self.pastas = fotos, cfg, metadados, False, []
+        self.fotos, self.cfg, self.metadados, self.cancelar, self.pasta = fotos, cfg, metadados, False, None
 
     def run(self):
         try:
-            self.pastas = processamento.salvar(self.fotos, self.cfg, self.progresso.emit, lambda: self.cancelar,
+            self.pasta = processamento.salvar(self.fotos, self.cfg, self.progresso.emit, lambda: self.cancelar,
                                                self.metadados)
         except Exception as e:
             traceback.print_exc()
@@ -221,7 +224,7 @@ class TelaRevisao(QWidget):
     def __init__(self):
         super().__init__()
         self.fotos, self.cfg, self.thread = [], None, None
-        self.metadados = {}  # {arquivo: Metadados} de cada lote
+        self.metadados = None  # Metadados do álbum
         self.alterado = False
         self._erros = []
         self._ordem_arquivo = {}
@@ -266,6 +269,7 @@ class TelaRevisao(QWidget):
         t.setObjectName("titulo")
         s = QLabel("Revisão das fotos extraídas")
         s.setObjectName("subtitulo")
+        self.lbl_album = s
         titulos.addStretch()
         titulos.addWidget(t)
         titulos.addWidget(s)
@@ -295,7 +299,7 @@ class TelaRevisao(QWidget):
         self.btn_salvar = tema.botao("Salvar todas", "download", "primario", "white")
         self.btn_salvar.clicked.connect(self.salvar)
         self.btn_metadados = tema.botao("Metadados", "calendario", cor_icone="#60a5fa",
-                                        dica="Data estimada, local e descrição do lote (Ctrl+M)")
+                                        dica="Data estimada, local e descrição do álbum (Ctrl+M)")
         self.btn_metadados.clicked.connect(self.editar_metadados)
 
         lay.addWidget(logo)
@@ -512,7 +516,7 @@ class TelaRevisao(QWidget):
         cab_meta = QHBoxLayout()
         ic_m = QLabel()
         ic_m.setPixmap(tema.icone("calendario", "#60a5fa", 14).pixmap(14, 14))
-        sec_m = QLabel("METADADOS DO LOTE")
+        sec_m = QLabel("METADADOS DO ÁLBUM")
         sec_m.setObjectName("secao")
         editar_meta = tema.botao("Editar…", tipo="link")
         editar_meta.setToolTip("Data estimada, local e descrição (Ctrl+M)")
@@ -552,7 +556,7 @@ class TelaRevisao(QWidget):
         giros.addWidget(self.btn_girar_dir)
         self.btn_ok = tema.BotaoAtalho("Aprovar e marcar como OK", "ok", "Ctrl+K", "sucesso", "#d1fae5")
         self.btn_ok.clicked.connect(self._alternar_ok)
-        self.btn_excluir = tema.botao("Excluir foto do lote (Del)", "lixeira", "perigo", "#fb7185")
+        self.btn_excluir = tema.botao("Excluir foto do álbum (Del)", "lixeira", "perigo", "#fb7185")
         self.btn_excluir.clicked.connect(self._alternar_exclusao)
 
         linha = QFrame()
@@ -583,7 +587,7 @@ class TelaRevisao(QWidget):
                 ("excluir", "Excluir / restaurar", ["Delete"], self._alternar_exclusao),
                 ("ant", "Foto anterior", ["Up"], lambda: self.navegar(-1)),
                 ("prox", "Próxima foto", ["Down"], lambda: self.navegar(1)),
-                ("meta", "Metadados do lote", ["Ctrl+M"], self.editar_metadados),
+                ("meta", "Metadados do álbum", ["Ctrl+M"], self.editar_metadados),
                 ("salvar", "Salvar todas", ["Ctrl+S"], self.salvar)):
             acao = QAction(texto, self)
             acao.setShortcuts([QKeySequence(a) for a in atalhos])
@@ -594,9 +598,12 @@ class TelaRevisao(QWidget):
 
     # ---------------- extração ----------------
 
-    def iniciar(self, arquivos, cfg):
-        self.fotos, self.cfg = [], cfg
-        self.metadados = {a: processamento.carregar_metadados(a, cfg) for a in arquivos}
+    def iniciar(self, arquivos, cfg, base):
+        """base: onde a pasta do álbum será criada (o nome é escolhido ao salvar)."""
+        self.fotos, self.cfg, self.base, self._arquivos = [], cfg, base, arquivos
+        self.metadados = Metadados()
+        self.lbl_album.setText("Álbum novo: o nome é definido ao salvar")
+        self.lbl_album.setToolTip("")
         self.lista.clear()
         self.filtro.setCurrentIndex(0)
         self.alterado = False
@@ -605,7 +612,7 @@ class TelaRevisao(QWidget):
         self.barra.setValue(0)
         self.lbl_progresso.setText("Iniciando…")
         self.faixa_progresso.show()
-        self.thread = ExtracaoThread(arquivos, cfg)
+        self.thread = ExtracaoThread(arquivos, cfg, None)
         self.thread.foto_pronta.connect(self._adicionar_foto)
         self.thread.progresso.connect(lambda v, t: (self.barra.setValue(v), self.lbl_progresso.setText(t)))
         self.thread.erro.connect(lambda arq, msg: self._erros.append(f"{arq}: {msg}"))
@@ -771,7 +778,7 @@ class TelaRevisao(QWidget):
         self.specs["dpi"].setText(f"{foto.dpi:g} dpi" if foto.dpi else "Desconhecida")
         w, h = round(foto.recorte.w), round(foto.recorte.h)
         self.specs["px"].setText(f"{h} x {w} px" if foto.rot90 % 2 else f"{w} x {h} px")
-        meta = self.metadados.get(foto.arquivo)
+        meta = self.metadados
         self.specs["data"].setText(meta.texto_data() if meta and meta.ano else "Não informada")
         local = meta.local if meta else ""
         coords = ""
@@ -791,7 +798,7 @@ class TelaRevisao(QWidget):
             self.btn_excluir.setIcon(tema.icone("restaurar", "#60a5fa"))
             tema.definir_prop(self.btn_excluir, "tipo", "")
         else:
-            self.btn_excluir.setText("Excluir foto do lote (Del)")
+            self.btn_excluir.setText("Excluir foto do álbum (Del)")
             self.btn_excluir.setIcon(tema.icone("lixeira", "#fb7185"))
             tema.definir_prop(self.btn_excluir, "tipo", "perigo")
 
@@ -881,7 +888,7 @@ class TelaRevisao(QWidget):
     def _alternar_exclusao(self):
         excluir = not all(i.data(Qt.UserRole).excluida for i in self._selecionados())
         self._alterar(lambda f: setattr(f, "excluida", excluir),
-                      "Foto(s) excluída(s) do lote." if excluir else "Foto(s) restaurada(s).")
+                      "Foto(s) excluída(s) do álbum." if excluir else "Foto(s) restaurada(s).")
 
     def _aprovar_restantes(self):
         n = 0
@@ -967,11 +974,9 @@ class TelaRevisao(QWidget):
                            else f"Página atualizada: {n} foto(s).")
 
     def editar_metadados(self):
-        if not self.metadados:
+        if self.cfg is None:
             return
-        item = self.lista.currentItem()
-        atual = item.data(Qt.UserRole).arquivo if item is not None else next(iter(self.metadados))
-        dialogo = DialogoMetadados(self.metadados, atual, self)
+        dialogo = DialogoMetadados(self.metadados, self.cfg.album, self)
         if dialogo.exec() != QDialog.Accepted or dialogo.resultado == self.metadados:
             return
         self.metadados = dialogo.resultado
@@ -982,12 +987,24 @@ class TelaRevisao(QWidget):
     def salvar(self):
         if not self.btn_salvar.isEnabled():
             return
-        existentes = processamento.arquivos_existentes(self.fotos, self.cfg)
-        if existentes and QMessageBox.question(
-                self, "Substituir fotos?",
-                f"{len(existentes)} foto(s) já existem nas pastas de saída e serão substituídas.\n\nContinuar?",
-        ) != QMessageBox.Yes:
+        sugestao = self.cfg.album or (self._arquivos[0].stem if len(self._arquivos) == 1 else "")
+        nome = DialogoAlbum(self.base, sugestao, self.cfg.pasta_album, self)
+        if nome.exec() != QDialog.Accepted:
             return
+        self.cfg.album, self.cfg.pasta_album, self.base = nome.nome(), nome.pasta(), nome.pasta().parent
+        self.lbl_album.setText(f"Álbum: {self.cfg.album}")
+        self.lbl_album.setToolTip(str(self.cfg.pasta_album))
+        existentes, antigas = processamento.conflitos(self.fotos, self.cfg)
+        # Substituir outro álbum já foi confirmado na janela do nome; só pergunta nos demais casos.
+        if (existentes or antigas) and not nome.substituir:
+            texto = f"O álbum “{self.cfg.album}” já tem fotos salvas.\n\n"
+            if existentes:
+                texto += f"• {len(existentes)} foto(s) serão substituídas pela versão atual.\n"
+            if antigas:
+                texto += (f"• {len(antigas)} foto(s) antigas serão apagadas, porque a numeração mudou "
+                          f"(fotos excluídas, divididas ou removidas).\n")
+            if QMessageBox.question(self, "Atualizar álbum?", texto + "\nContinuar?") != QMessageBox.Yes:
+                return
         total = sum(not f.excluida for f in self.fotos)
         formato = self.cfg.formato.upper()
         dialogo = QProgressDialog(f"Salvando fotos em {formato}…", "Cancelar", 0, total, self)
@@ -1012,11 +1029,11 @@ class TelaRevisao(QWidget):
                                                        "não ter sido gravadas.")
             return
         self.alterado = False
-        caixa = QMessageBox(QMessageBox.Information, "Fotos salvas",
-                            f"{total} foto(s) salvas em {formato} em:\n\n" + "\n".join(map(str, t.pastas)), parent=self)
-        abrir = caixa.addButton("Abrir pasta", QMessageBox.AcceptRole)
+        caixa = QMessageBox(QMessageBox.Information, "Álbum salvo",
+                            f"Álbum “{self.cfg.album}”: {total} foto(s) salvas em {formato} em:\n\n{t.pasta}",
+                            parent=self)
+        abrir = caixa.addButton("Abrir pasta do álbum", QMessageBox.AcceptRole)
         caixa.addButton("Fechar", QMessageBox.RejectRole)
         caixa.exec()
         if caixa.clickedButton() is abrir:
-            for pasta in t.pastas[:5]:
-                os.startfile(pasta)
+            os.startfile(t.pasta)

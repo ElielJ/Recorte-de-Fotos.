@@ -1,5 +1,4 @@
-"""Janela para informar os metadados de cada lote: data estimada, local e descrição."""
-from dataclasses import replace
+"""Janela para informar os metadados do álbum: data estimada, local e descrição."""
 from datetime import date
 from urllib.parse import quote
 
@@ -25,31 +24,22 @@ def _secao(nome_icone, texto):
 
 
 class DialogoMetadados(QDialog):
-    def __init__(self, metadados, arquivo_inicial, parent=None):
-        """metadados: {arquivo: Metadados}. Edita uma cópia; o resultado fica em self.resultado."""
-        super().__init__(parent)
-        self.setWindowTitle("Metadados do lote")
-        self.setMinimumWidth(820)
-        self.resultado = {a: replace(m) for a, m in metadados.items()}
-        self._atual = arquivo_inicial
+    def __init__(self, metadados, album, parent=None):
+        """metadados: Metadados atuais do álbum; album: nome (None se ainda não foi salvo).
 
-        titulo = QLabel("Metadados do lote")
+        O resultado fica em self.resultado.
+        """
+        super().__init__(parent)
+        self.setWindowTitle("Metadados do álbum")
+        self.setMinimumWidth(820)
+        self.resultado = metadados
+
+        titulo = QLabel(f"Metadados do álbum “{album}”" if album else "Metadados do álbum")
         titulo.setObjectName("tituloGrande")
-        sub = QLabel("Gravados em todas as fotos do lote. O Google Fotos e outros organizadores usam a data e a "
+        sub = QLabel("Gravados em todas as fotos do álbum. O Google Fotos e outros organizadores usam a data e a "
                      "localização para colocar cada foto no lugar certo da linha do tempo e do mapa.")
         sub.setObjectName("subtitulo")
         sub.setWordWrap(True)
-
-        self.lote = QComboBox()
-        for a in self.resultado:
-            self.lote.addItem(a.name, a)
-        self.lote.setCurrentIndex(list(self.resultado).index(arquivo_inicial))
-        self.lote.currentIndexChanged.connect(self._trocar_lote)
-        linha_lote = QHBoxLayout()
-        rot_lote = QLabel("Lote (arquivo):")
-        rot_lote.setObjectName("subtitulo")
-        linha_lote.addWidget(rot_lote)
-        linha_lote.addWidget(self.lote, 1)
 
         # Data
         self.usar_data = QCheckBox("Informar a data em que as fotos foram tiradas")
@@ -116,8 +106,6 @@ class DialogoMetadados(QDialog):
         la.addWidget(ic)
         la.addWidget(txt, 1)
 
-        self.todos = QCheckBox("Aplicar estes dados a todos os lotes deste trabalho")
-        self.todos.setVisible(len(self.resultado) > 1)
         salvar = tema.botao("Salvar metadados", "check", "primario", "white")
         salvar.setDefault(True)
         salvar.clicked.connect(self._confirmar)
@@ -157,16 +145,13 @@ class DialogoMetadados(QDialog):
         lay.setSpacing(10)
         lay.addWidget(titulo)
         lay.addWidget(sub)
-        if len(self.resultado) > 1:
-            lay.addLayout(linha_lote)
         lay.addSpacing(8)
         lay.addLayout(colunas)
         lay.addSpacing(8)
         lay.addWidget(aviso)
-        lay.addWidget(self.todos)
         lay.addLayout(botoes)
 
-        self._carregar(self.resultado[self._atual])
+        self._carregar(metadados)
 
     # ---------------- campos <-> Metadados ----------------
 
@@ -223,17 +208,6 @@ class DialogoMetadados(QDialog):
             self.lbl_coords.setText("Formato não reconhecido. Exemplo: -23.9608, -46.3336")
             self.lbl_coords.setStyleSheet(f"color: {tema.CORES_ESTADO['excluida']};")
 
-    def _trocar_lote(self):
-        m = self._ler()
-        if m is None:  # coordenadas inválidas: volta para o lote anterior
-            self.lote.blockSignals(True)
-            self.lote.setCurrentIndex(list(self.resultado).index(self._atual))
-            self.lote.blockSignals(False)
-            return
-        self.resultado[self._atual] = m
-        self._atual = self.lote.currentData()
-        self._carregar(self.resultado[self._atual])
-
     def _abrir_mapa(self):
         termo = self.local.text().strip()
         url = f"https://www.google.com/maps/search/{quote(termo)}" if termo else "https://www.google.com/maps"
@@ -243,9 +217,5 @@ class DialogoMetadados(QDialog):
         m = self._ler()
         if m is None:
             return
-        if self.todos.isChecked():
-            for a in self.resultado:
-                self.resultado[a] = replace(m)
-        else:
-            self.resultado[self._atual] = m
+        self.resultado = m
         self.accept()
