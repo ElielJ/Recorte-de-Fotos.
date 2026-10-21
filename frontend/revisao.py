@@ -110,16 +110,17 @@ class CartaoFoto(QFrame):
         for w in [self] + self.findChildren(QWidget):
             w.setAttribute(Qt.WA_TransparentForMouseEvents)
 
-    def atualizar(self, foto):
+    def atualizar(self, foto, total_na_pagina=1):
         pix = pixmap_da_previa(foto).scaled(self.LARG - 4, self.ALT - 4, Qt.KeepAspectRatio,
                                             Qt.SmoothTransformation)
         self.mini.setPixmap(pix)
-        self.numero.setText(f"#{foto.pagina + 1}")
+        varias = total_na_pagina > 1
+        self.numero.setText(f"#{foto.pagina + 1}" + (f".{foto.indice + 1}" if varias else ""))
         self.numero.adjustSize()
         self.numero.move(self.LARG - self.numero.width() - 4, self.ALT - self.numero.height() - 4)
         self.nome.setText(self.nome.fontMetrics().elidedText(foto.arquivo.stem, Qt.ElideRight, 150))
         self.nome.setToolTip(foto.arquivo.name)
-        self.pagina.setText(f"pág. {foto.pagina + 1}")
+        self.pagina.setText(f"pág. {foto.pagina + 1}" + (f" · {foto.indice + 1}/{total_na_pagina}" if varias else ""))
         tam = foto.tamanho_cm()
         partes = [f"{tam[0]:.1f} x {tam[1]:.1f} cm" if tam else f"{round(foto.recorte.w)} x "
                                                                   f"{round(foto.recorte.h)} px"]
@@ -627,21 +628,35 @@ class TelaRevisao(QWidget):
 
     def _adicionar_foto(self, foto):
         self.fotos.append(foto)
+        item = self._inserir_item(foto)
+        for outro in self._itens_da_pagina(foto):  # numeração "1/2", "2/2" nos cartões da página
+            self._renderizar(outro)
+        if self.lista.currentItem() is None:
+            self.lista.setCurrentItem(item)
+        self._atualizar()
+
+    def _inserir_item(self, foto, grupo=None):
         item = QListWidgetItem()
         item.setData(Qt.UserRole, foto)
-        # Ordem fixa: as que precisam de revisão primeiro, depois por arquivo e página.
-        chave = (foto.estado != "revisar", self._ordem_arquivo[foto.arquivo], foto.pagina)
+        # Ordem fixa: as que precisam de revisão primeiro, depois por arquivo, página e posição na página.
+        grupo = (foto.estado != "revisar") if grupo is None else grupo
+        chave = (grupo, self._ordem_arquivo[foto.arquivo], foto.pagina, foto.indice)
         item.setData(Qt.UserRole + 1, chave)
         posicao = next((i for i in range(self.lista.count())
                         if self.lista.item(i).data(Qt.UserRole + 1) > chave), self.lista.count())
         item.setSizeHint(QSize(0, 98))
         self.lista.insertItem(posicao, item)
-        cartao = CartaoFoto()
-        self.lista.setItemWidget(item, cartao)
+        self.lista.setItemWidget(item, CartaoFoto())
         self._renderizar(item)
-        if self.lista.currentItem() is None:
-            self.lista.setCurrentItem(item)
-        self._atualizar()
+        return item
+
+    def _da_pagina(self, foto):
+        return [f for f in self.fotos if f.arquivo == foto.arquivo and f.pagina == foto.pagina]
+
+    def _itens_da_pagina(self, foto):
+        return [self.lista.item(i) for i in range(self.lista.count())
+                if (lambda f: f.arquivo == foto.arquivo and f.pagina == foto.pagina)(
+                    self.lista.item(i).data(Qt.UserRole))]
 
     def _extracao_terminou(self):
         self.faixa_progresso.hide()
@@ -663,14 +678,16 @@ class TelaRevisao(QWidget):
     def _renderizar(self, item):
         foto = item.data(Qt.UserRole)
         cartao = self.lista.itemWidget(item)
-        cartao.atualizar(foto)
+        cartao.atualizar(foto, len(self._da_pagina(foto)))
         cartao.selecionar(item.isSelected())
         self._aplicar_filtro_item(item)
 
     def _marcar_selecao(self):
         for i in range(self.lista.count()):
             item = self.lista.item(i)
-            self.lista.itemWidget(item).selecionar(item.isSelected())
+            cartao = self.lista.itemWidget(item)
+            if cartao is not None:  # o cartão é criado logo depois de o item entrar na lista
+                cartao.selecionar(item.isSelected())
 
     def _aplicar_filtro(self):
         for i in range(self.lista.count()):
@@ -711,8 +728,11 @@ class TelaRevisao(QWidget):
         foto = item.data(Qt.UserRole)
         estado = estado_visual(foto)
         self.visualizador.definir(pixmap_da_previa(foto))
+        n_pagina = len(self._da_pagina(foto))
+        posicao = f"&nbsp;&nbsp;•&nbsp;&nbsp;foto {foto.indice + 1} de {n_pagina}" if n_pagina > 1 else ""
         self.titulo_foto.setText(f"<b style='color:white'>{foto.arquivo.name}</b>"
-                                 f"<span style='color:#94a3b8'>&nbsp;&nbsp;•&nbsp;&nbsp;página {foto.pagina + 1}</span>")
+                                 f"<span style='color:#94a3b8'>&nbsp;&nbsp;•&nbsp;&nbsp;página {foto.pagina + 1}"
+                                 f"{posicao}</span>")
         self.pilula_foto.definir(estado, {"revisar": "Requer atenção", "ok": "Pronta para salvar",
                                           "editado": "Editada • pronta para salvar",
                                           "excluida": "Marcada para exclusão"}[estado])
@@ -893,26 +913,58 @@ class TelaRevisao(QWidget):
             self.toast.mostrar("Aguarde o fim da extração para editar recortes.")
             return
         foto = item.data(Qt.UserRole)
+        # O editor mostra todos os recortes da página (as excluídas ficam de fora, salvo a selecionada).
+        editaveis = [f for f in self._da_pagina(foto) if not f.excluida or f is foto]
+        editaveis.sort(key=lambda f: f.indice)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             pagina = processamento.carregar_pagina(foto)
-            editor = EditorRecorte(foto, pagina.imagem, self)
+            editor = EditorRecorte(editaveis, foto, pagina.imagem, self.cfg.tamanho_cm, self)
         finally:
             QApplication.restoreOverrideCursor()
         editor.setWindowState(Qt.WindowMaximized)
         if editor.exec() != QDialog.Accepted:
             return
-        novo = editor.recorte()
-        if novo == foto.recorte:
+        resultado, indice_ativo = editor.resultado()
+        self._aplicar_edicao(foto, editaveis, resultado, indice_ativo, pagina.imagem)
+
+    def _aplicar_edicao(self, modelo, editaveis, resultado, indice_ativo, imagem):
+        """Aplica na lista o que foi feito no editor: recortes alterados, novos e removidos."""
+        mantidas = {id(f) for f, _ in resultado if f is not None}
+        removidas = [f for f in editaveis if id(f) not in mantidas]
+        alteradas = []
+        for f, r in resultado:
+            if f is None:
+                nova = processamento.nova_foto(modelo, r)
+                self.fotos.append(nova)
+                alteradas.append(nova)
+            elif r != f.recorte:
+                f.recorte = r
+                f.estado, f.motivo = "editado", ""
+                alteradas.append(f)
+        if not alteradas and not removidas:
             return
-        foto.recorte = novo
-        foto.estado, foto.motivo = "editado", ""
-        processamento.atualizar_previa(foto, pagina.imagem)
-        self._renderizar(item)
+        ativa = resultado[indice_ativo][0] or alteradas[-1]
+        ids_removidas = {id(f) for f in removidas}
+        self.fotos = [f for f in self.fotos if id(f) not in ids_removidas]
+
+        # Renumera a página e recria os cartões dela na posição certa da lista.
+        itens = self._itens_da_pagina(modelo)
+        grupo = min(i.data(Qt.UserRole + 1)[0] for i in itens)
+        for i in itens:
+            self.lista.takeItem(self.lista.row(i))
+        da_pagina = self._da_pagina(modelo)
+        processamento.renumerar(da_pagina)
+        for f in alteradas:
+            processamento.atualizar_previa(f, imagem)
+        novos = {id(f): self._inserir_item(f, grupo) for f in sorted(da_pagina, key=lambda f: f.indice)}
+        self._selecionar_unico(novos[id(ativa)])
         self.alterado = True
         self._mostrar_atual()
         self._atualizar()
-        self.toast.mostrar("Recorte atualizado.")
+        n = len([f for f in da_pagina if not f.excluida])
+        self.toast.mostrar("Recorte atualizado." if n == 1 and not removidas and len(resultado) == 1
+                           else f"Página atualizada: {n} foto(s).")
 
     def editar_metadados(self):
         if not self.metadados:

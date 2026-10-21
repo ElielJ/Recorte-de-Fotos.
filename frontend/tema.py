@@ -68,6 +68,8 @@ ICONES = {
     "local": '<path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 '
              '0 0 1 16 0"/><circle cx="12" cy="10" r="3"/>',
     "texto": '<path d="M17 6.1H3"/><path d="M21 12.1H3"/><path d="M15.1 18H3"/>',
+    "mais": '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    "dividir": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/>',
 }
 
 

@@ -1,4 +1,4 @@
-"""Detecção automática da foto dentro da página digitalizada."""
+"""Detecção automática das fotos dentro da página digitalizada (uma ou várias por página)."""
 from math import atan2, degrees, hypot
 
 import cv2
@@ -12,7 +12,10 @@ TOLERANCIA_TAMANHO = 0.06
 
 
 def detectar(img, dpi, tamanho_cm=None, margem_mm=0.0):
-    """Retorna (Recorte, estado, motivo); estado é "ok" ou "revisar"."""
+    """Encontra todas as fotos da página.
+
+    Retorna uma lista de (Recorte, estado, motivo) em ordem de leitura; estado é "ok" ou "revisar".
+    """
     a = para_8bits(img)
     alt, larg = a.shape[:2]
     f = min(1.0, (MAX_PIXELS / (alt * larg)) ** 0.5)
@@ -27,41 +30,91 @@ def detectar(img, dpi, tamanho_cm=None, margem_mm=0.0):
     limiar, _ = cv2.threshold(dif, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     _, mascara = cv2.threshold(dif, float(np.clip(limiar, 12, 60)), 255, cv2.THRESH_BINARY)
     mascara = cv2.morphologyEx(mascara, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))  # remove poeira
-    k = max(3, int(min(mascara.shape) * 0.01))
+    # ~1 mm: fecha pequenas falhas na borda da foto sem juntar fotos vizinhas.
+    k = max(3, round((dpi or 300) / 25.4 * f))
     mascara = cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
 
     contornos, _ = cv2.findContours(mascara, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contornos:
-        return Recorte(larg / 2, alt / 2, larg, alt), "revisar", "nenhuma foto encontrada"
-    contorno = max(contornos, key=cv2.contourArea)
+        return [(Recorte(larg / 2, alt / 2, larg, alt), "revisar", "nenhuma foto encontrada")]
+
+    # Área (na escala da detecção) de uma foto do tamanho esperado; sem ela, usa 2% da página.
+    esperado = (tamanho_cm[0] * tamanho_cm[1] * (dpi * f / 2.54) ** 2) if dpi and tamanho_cm else None
+    minimo = 0.35 * esperado if esperado else 0.02 * mascara.size
+    candidatos = [c for c in contornos if _area_retangulo(c) >= minimo]
+    pequena = not candidatos
+    if pequena:  # nada com tamanho de foto: fica com o maior objeto, para revisão
+        candidatos = [max(contornos, key=cv2.contourArea)]
+
+    # Não divide sozinho: uma foto 15x21 tem o mesmo tamanho de duas 10x15, então só o usuário decide.
+    resultados = []
+    for c in candidatos:
+        r, motivos = _avaliar(c, mascara.shape, f, dpi, tamanho_cm, esperado)
+        if pequena:
+            motivos.insert(0, "área detectada muito pequena")
+        resultados.append((r, motivos))
+
+    m = margem_mm / 25.4 * (dpi or 300)
+    saida = []
+    for r, motivos in resultados:
+        r.w, r.h = max(1.0, r.w - 2 * m), max(1.0, r.h - 2 * m)
+        saida.append((r, "revisar" if motivos else "ok", "; ".join(motivos)))
+    return [saida[i] for i in ordem_leitura([r for r, _, _ in saida])]
+
+
+def ordem_leitura(recortes):
+    """Índices em ordem de leitura: linhas de cima para baixo e, em cada linha, da esquerda para a direita."""
+    restantes = sorted(range(len(recortes)), key=lambda i: recortes[i].cy)
+    ordem = []
+    while restantes:
+        topo = recortes[restantes[0]]
+        linha = [i for i in restantes if recortes[i].cy - topo.cy < min(topo.h, recortes[i].h) / 2]
+        ordem += sorted(linha, key=lambda i: recortes[i].cx)
+        restantes = [i for i in restantes if i not in linha]
+    return ordem
+
+
+def _area_retangulo(contorno):
+    _, (w, h), _ = cv2.minAreaRect(contorno)
+    return w * h
+
+
+def _confere(medido_cm, tamanho_cm):
+    return all(abs(m - e) / e <= TOLERANCIA_TAMANHO for m, e in zip(sorted(medido_cm), sorted(tamanho_cm)))
+
+
+def _avaliar(contorno, forma, f, dpi, tamanho_cm, esperado):
+    """Retorna (Recorte sem margem, motivos para revisão)."""
     (cx, cy), (w, h), ang = cv2.minAreaRect(contorno)
     pontos = cv2.boxPoints(((cx, cy), (w, h), ang))
     # +0.5: passa de centros de pixel para coordenadas contínuas.
     r = _normalizar(pontos + 0.5).escalado(1 / f)
 
     motivos = []
-    if w * h < 0.05 * mascara.size:
-        motivos.append("área detectada muito pequena")
-    elif cv2.contourArea(contorno) / (w * h) < 0.95:
+    if cv2.contourArea(contorno) / (w * h) < 0.95:
         motivos.append("contorno irregular")
     tamanho_ok = False
-    if dpi and tamanho_cm:
+    if esperado:
         medido = sorted((r.w / dpi * 2.54, r.h / dpi * 2.54))
-        esperado = sorted(tamanho_cm)
-        tamanho_ok = all(abs(m - e) / e <= TOLERANCIA_TAMANHO for m, e in zip(medido, esperado))
-        if not tamanho_ok:
+        tamanho_ok = _confere(medido, tamanho_cm)
+        # Duas fotos encostadas: o lado maior tem o dobro e a metade confere com o tamanho esperado.
+        if not tamanho_ok and _confere((medido[1] / 2, medido[0]), tamanho_cm):
+            motivos.append(f"tamanho {medido[0]:.1f} x {medido[1]:.1f} cm: parece conter duas fotos "
+                           f"encostadas; se for o caso, use “Dividir em duas” no editor")
+        elif not tamanho_ok and w * h >= 1.6 * esperado:
+            motivos.append("pode conter mais de uma foto encostada; se for o caso, use “Dividir em duas” "
+                           "no editor")
+        elif not tamanho_ok:
+            alvo = sorted(tamanho_cm)
             motivos.append(f"tamanho {medido[0]:.1f} x {medido[1]:.1f} cm difere do esperado "
-                           f"{esperado[0]:g} x {esperado[1]:g} cm")
-    # Scanners com alimentador começam na borda da foto, então encostar na borda é normal;
-    # só é suspeito quando o tamanho não confirma que a foto está inteira.
-    mh, mw = mascara.shape
+                           f"{alvo[0]:g} x {alvo[1]:g} cm")
+    # Scanners com alimentador começam na borda da foto, e no vidro a foto costuma ficar encostada
+    # no canto; só é suspeito quando o tamanho não confirma que a foto está inteira.
+    mh, mw = forma
     if not tamanho_ok and (pontos[:, 0].min() <= 1 or pontos[:, 1].min() <= 1
                            or pontos[:, 0].max() >= mw - 2 or pontos[:, 1].max() >= mh - 2):
         motivos.append("foto encostada na borda da digitalização")
-
-    m = margem_mm / 25.4 * (dpi or 300)
-    r.w, r.h = max(1.0, r.w - 2 * m), max(1.0, r.h - 2 * m)
-    return r, ("revisar" if motivos else "ok"), "; ".join(motivos)
+    return r, motivos
 
 
 def _cor_fundo(a):

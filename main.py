@@ -33,7 +33,7 @@ def linha_de_comando(args):
         for foto, i, total in extrair(arquivo, cfg):
             fotos.append(foto)
             aviso = f"  REVISAR: {foto.motivo}" if foto.estado == "revisar" else ""
-            print(f"  página {i}/{total}{aviso}")
+            print(f"  página {i}/{total}, foto {foto.indice + 1}{aviso}")
         existentes = arquivos_existentes(fotos, cfg)
         if existentes and not a.sobrescrever:
             print(f"  {len(existentes)} foto(s) já existem; use --sobrescrever para substituir. Arquivo ignorado.")

@@ -24,11 +24,11 @@ Programa para Windows que **extrai e recorta automaticamente fotos digitalizadas
 
 ## O problema
 
-Fotos antigas em papel são digitalizadas uma a uma num scanner de documentos. O scanner sempre gera uma **página A4 inteira**, com a foto ocupando só uma parte e o resto preenchido pelo fundo do scanner. Normalmente várias páginas vão para um único PDF ou TIFF.
+Fotos antigas em papel são digitalizadas num scanner de documentos (uma por vez, pelo alimentador) ou no vidro de uma impressora multifuncional (várias de uma vez). O scanner sempre gera uma **página A4 inteira**, com uma ou mais fotos ocupando só uma parte e o resto preenchido pelo fundo do scanner. Normalmente várias páginas vão para um único PDF ou TIFF.
 
 Transformar isso em fotos utilizáveis à mão é trabalhoso e arriscado:
 
-- É preciso abrir cada página e recortar a foto manualmente num editor de imagens.
+- É preciso abrir cada página e recortar cada foto manualmente num editor de imagens.
 - O recorte manual raramente é preciso: sobra uma faixa de fundo ou se corta parte da foto.
 - A foto costuma entrar levemente torta no scanner e precisa ser endireitada.
 - Cada vez que a imagem é aberta e salva de novo em formatos com perdas, como JPEG, a qualidade cai.
@@ -37,16 +37,17 @@ Transformar isso em fotos utilizáveis à mão é trabalhoso e arriscado:
 ## Como o programa resolve
 
 ```text
-PDF/TIFF ──► extrai a página original ──► detecta a foto ──► você revisa e ajusta ──► grava PNG/JPEG
-             (sem perda de qualidade)     (posição, tamanho    (editor visual)          (com data, local
-                                           e inclinação)                                e descrição)
+PDF/TIFF ──► extrai a página original ──► detecta as fotos ──► você revisa e ajusta ──► grava PNG/JPEG
+             (sem perda de qualidade)     (uma ou várias;      (editor visual)          (com data, local
+                                           posição, tamanho                             e descrição)
+                                           e inclinação)
 ```
 
 1. **Leitura sem perdas.** Em TIFF, cada página é lida diretamente. Em PDF, o programa **extrai a imagem original** que o scanner gravou, em vez de "imprimir" a página numa nova resolução, o que reamostraria a imagem. Páginas giradas no PDF são corrigidas automaticamente.
-2. **Detecção automática da foto.** O programa estima a cor do fundo do scanner pelas bordas da página e separa a foto desse fundo. Em seguida calcula o retângulo exato da foto: posição, largura, altura e **ângulo de inclinação**. Nos testes com imagens sintéticas, o erro ficou abaixo de 0,1 pixel na posição e de 0,003° no ângulo.
+2. **Detecção automática das fotos.** O programa estima a cor do fundo do scanner pelas bordas da página e separa as fotos desse fundo. **Todas as fotos da página** são encontradas (manchas e poeira são ignoradas pelo tamanho) e numeradas em ordem de leitura: de cima para baixo e, na mesma linha, da esquerda para a direita. Para cada uma é calculado o retângulo exato: posição, largura, altura e **ângulo de inclinação**. Nos testes com imagens sintéticas, o erro ficou em cerca de 1 pixel na posição, e o ângulo saiu igual ao real.
 3. **Recorte preservando os pixels originais.** Se a inclinação for desprezível (menos de 0,2°), a foto é recortada **sem rotação**, mantendo os pixels intactos. Se for preciso endireitar, a rotação é feita **uma única vez**, com interpolação de alta qualidade (Lanczos). Uma margem interna configurável elimina restos de fundo na borda.
-4. **Validação.** O tamanho medido em centímetros, calculado pela resolução do arquivo, é comparado com o tamanho esperado da foto (por exemplo 10x15). Fotos com tamanho diferente, contorno irregular ou outras suspeitas são marcadas **"Revisar"**.
-5. **Revisão e edição visual.** Uma tela mostra todas as fotos extraídas, com as suspeitas primeiro. O editor de recorte permite ajustar cantos, bordas, posição e ângulo sobre a página original, com zoom até o nível do pixel. **Toda edição recorta de novo a partir da página original**, então ajustar várias vezes não perde qualidade.
+4. **Validação.** O tamanho medido em centímetros, calculado pela resolução do arquivo, é comparado com o tamanho esperado da foto (por exemplo 10x15). Fotos com tamanho diferente, contorno irregular ou outras suspeitas são marcadas **"Revisar"**. Um recorte com o tamanho de duas fotos recebe o aviso "parece conter duas fotos encostadas". O programa **não divide sozinho**, porque uma foto 15x21 tem o mesmo tamanho de duas 10x15.
+5. **Revisão e edição visual.** Uma tela mostra todas as fotos extraídas, com as suspeitas primeiro. O editor mostra **todos os recortes da página** sobre a imagem original e permite ajustar cantos, bordas, posição e ângulo, com zoom até o nível do pixel, além de **adicionar**, **dividir** ou **remover** recortes. **Toda edição recorta de novo a partir da página original**, então ajustar várias vezes não perde qualidade.
 6. **Gravação com metadados.** As fotos são gravadas em PNG (sem perdas) ou JPEG (menor), com a resolução (DPI), o perfil de cor, quando existir, e os metadados do lote: data estimada, coordenadas GPS e descrição.
 
 ---
@@ -88,11 +89,19 @@ A qualidade final nunca é maior que a da digitalização. Configure o software 
 | Cor | 24 bits (ou 48 bits, se disponível) | O programa preserva 16 bits por canal no PNG |
 | Tamanho da página | A4 | |
 | Corte, endireitamento e nitidez automáticos | **Desligados** | O programa faz isso com mais controle |
-| Uma foto por página | Sim | O programa detecta uma foto por página |
+| Fotos por página | Uma ou várias | O programa detecta todas as fotos da página |
+
+**Scanner com alimentador** (ex.: Fujitsu fi-6130): uma foto por página.
 
 > **Cuidado com o alimentador:** fotos antigas podem riscar, dobrar ou grudar nos roletes. Use uma **folha transportadora (carrier sheet)**.
 
-Em scanners com alimentador, a foto sai "encostada" na borda de cima da página. Isso é normal: quando o tamanho confere com o esperado, o programa sabe que a foto está inteira.
+Nesse tipo de scanner, a foto sai "encostada" na borda de cima da página. Isso é normal: quando o tamanho confere com o esperado, o programa sabe que a foto está inteira.
+
+**Scanner de mesa (vidro de impressora multifuncional):** cabem várias fotos por página.
+
+- Deixe **pelo menos 5 mm de espaço** entre as fotos. Fotos encostadas viram um único recorte e precisam ser divididas no editor.
+- Mantenha a tampa fechada; o fundo dela é o "fundo" que o programa separa das fotos.
+- As fotos podem ficar levemente tortas: a inclinação de cada uma é corrigida separadamente.
 
 ---
 
@@ -112,7 +121,7 @@ Em scanners com alimentador, a foto sai "encostada" na borda de cima da página.
 
 As fotos aparecem à medida que são processadas.
 
-- **Lista à esquerda:** miniatura, medidas e estado de cada foto. As que precisam de atenção aparecem primeiro.
+- **Lista à esquerda:** miniatura, medidas e estado de cada foto. As que precisam de atenção aparecem primeiro. Em páginas com várias fotos, o cartão mostra a posição na página (ex.: "pág. 1 · 2/3").
 - **Centro:** a foto selecionada, com zoom (roda do mouse), arraste para navegar, giro de 90° e ajustar à tela.
 - **Painel à direita:** o diagnóstico (por que a foto está em "Revisar"), as especificações técnicas, os metadados do lote e as ações.
 
@@ -139,16 +148,19 @@ Ações e atalhos:
 
 Também há o filtro (Todas / Para revisar / Prontas / Excluídas), o link **Aprovar restantes** e seleção múltipla com `Ctrl`/`Shift` para girar, aprovar ou excluir várias fotos de uma vez.
 
-### 3. Editor de recorte
+### 3. Editor de recortes
 
-Mostra a página digitalizada inteira com o recorte em destaque:
+Mostra a página digitalizada inteira com **todos os recortes da página**, numerados na ordem em que serão salvos. O recorte selecionado tem alças azuis; os outros aparecem tracejados. **Clique** num recorte para selecioná-lo.
 
 - Arraste os **cantos** e as **bordas** para ajustar o tamanho.
 - Arraste o **interior** para mover o recorte.
 - Arraste o **círculo** acima do recorte para girar, ou digite o ângulo exato.
 - Use a **roda do mouse** para dar zoom. **Zoom 100%** mostra os pixels reais, para um ajuste preciso.
 - **Restaurar automático** volta ao recorte detectado pelo programa.
-- **Aplicar recorte** volta à revisão com a foto marcada como "Editada".
+- **Adicionar foto** cria um recorte novo, do tamanho esperado, para uma foto que não foi detectada.
+- **Dividir em duas** separa ao meio um recorte que juntou duas fotos encostadas; depois é só ajustar cada metade.
+- **Remover esta foto** apaga um recorte falso, como uma mancha ou um papel detectado como foto.
+- **Aplicar** volta à revisão. As fotos alteradas ou criadas ficam marcadas como "Editada".
 
 ### 4. Salvar
 
@@ -206,13 +218,16 @@ As fotos de cada arquivo vão para uma pasta **com o nome dele**:
 Área de Trabalho/
 ├── Album 1987.tif               ← arquivo digitalizado
 └── Album 1987/                  ← criada pelo programa
-    ├── Album 1987_001.png       ← foto da página 1
-    ├── Album 1987_002.png
+    ├── Album 1987_001.png       ← página 1 (uma foto)
+    ├── Album 1987_002_1.png     ← página 2, foto 1 (página com várias fotos)
+    ├── Album 1987_002_2.png     ← página 2, foto 2
     ├── Album 1987_003.png
     └── recortes.json            ← recortes, edições e metadados
 ```
 
-O **`recortes.json`** guarda o recorte automático e o editado de cada página, giros, exclusões, estados e os metadados do lote. Ao processar o mesmo arquivo de novo, o programa **reaproveita** esse trabalho em vez de detectar tudo outra vez.
+Páginas com uma foto geram `Nome_003.png`. Páginas com várias fotos geram `Nome_003_1.png`, `Nome_003_2.png` e assim por diante, numeradas em ordem de leitura.
+
+O **`recortes.json`** guarda o recorte automático e o editado de cada foto, giros, exclusões, estados e os metadados do lote. Ao processar o mesmo arquivo de novo, o programa **reaproveita** esse trabalho em vez de detectar tudo outra vez.
 
 > Para refazer a detecção do zero (por exemplo, depois de mudar o tamanho esperado), apague o `recortes.json`, ou a pasta inteira, antes de extrair de novo.
 
@@ -242,7 +257,8 @@ As fotos que precisariam de revisão aparecem como `REVISAR` na saída. Os metad
 
 ## Limitações conhecidas
 
-- **Uma foto por página.** Várias fotos na mesma página não são separadas.
+- **Fotos encostadas.** Fotos sem espaço entre si viram um único recorte. O programa avisa, mas a divisão é feita por você no editor (**Dividir em duas**).
+- **Fotos muito pequenas.** Para ignorar poeira e manchas, só contam como foto objetos com pelo menos 35% da área do tamanho esperado, ou 2% da página quando o tamanho não é validado. Uma foto muito menor que o tamanho esperado (ex.: 3x4 com a opção em 10x15) não é detectada; adicione-a no editor ou use "Não validar o tamanho".
 - **Foto clara sobre fundo claro.** Áreas muito claras encostadas na borda da foto (céu, moldura branca) sobre o fundo branco do scanner podem fazer a detecção cortar a foto menor. Nesses casos a validação de tamanho manda a foto para "Revisar", e o ajuste se faz no editor. Se muitas fotos tiverem moldura branca, prefira o fundo preto no scanner, se houver essa opção.
 - **PDF sem imagem única.** Se uma página de PDF não tiver uma única imagem do scanner, ela é renderizada a 600 dpi e marcada para revisão.
 - **Resolução desconhecida.** Sem informação de DPI no arquivo, a validação de tamanho em cm não é feita.

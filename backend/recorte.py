@@ -29,6 +29,17 @@ class Recorte:
         return {k: round(v, 3) for k, v in asdict(self).items()}
 
 
+def dividir(r):
+    """Divide o recorte ao meio ao longo do lado maior (ex.: duas fotos encostadas)."""
+    c, s = cos(radians(r.angulo)), sin(radians(r.angulo))
+    if r.w >= r.h:
+        dx, dy, w, h = c * r.w / 4, s * r.w / 4, r.w / 2, r.h
+    else:
+        dx, dy, w, h = -s * r.h / 4, c * r.h / 4, r.w, r.h / 2
+    return (Recorte(r.cx - dx, r.cy - dy, w, h, r.angulo),
+            Recorte(r.cx + dx, r.cy + dy, w, h, r.angulo))
+
+
 def cortar(img, r, rot90=0, interpolacao=cv2.INTER_LANCZOS4):
     """Recorta a foto. rot90 = número de giros de 90° no sentido horário."""
     W, H = max(1, round(r.w)), max(1, round(r.h))
