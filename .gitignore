@@ -1,0 +1,36 @@
+# Ambiente virtual (recriado pelo "Recortar Fotos.bat")
+.venv/
+venv/
+
+# Versão local do pyenv (específica desta máquina)
+.python-version
+
+# Cache do Python
+__pycache__/
+*.py[cod]
+
+# Builds e executáveis (PyInstaller)
+build/
+dist/
+*.spec
+
+# Editores e IDEs
+.vscode/
+.idea/
+
+# Arquivos do sistema
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Arquivos temporários (gravação atômica das fotos)
+*.tmp
+
+# Fotos digitalizadas e fotos geradas: dados pessoais, não devem ir para o repositório
+*.pdf
+*.tif
+*.tiff
+*.png
+*.jpg
+*.jpeg
+recortes.json
