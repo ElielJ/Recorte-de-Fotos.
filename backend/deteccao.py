@@ -23,10 +23,15 @@ def detectar(img, dpi, tamanho_cm=None, margem_mm=0.0):
         a = cv2.resize(a, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
     a = cv2.GaussianBlur(a, (5, 5), 0)
 
-    # Diferença de cada pixel para a cor do fundo (estimada pelas bordas da página).
-    dif = np.abs(a.astype(np.int16) - _cor_fundo(a)).astype(np.uint8)
-    if dif.ndim == 3:
-        dif = dif.max(axis=2)
+    # Diferença de cada pixel para a cor do fundo (estimada pelas bordas da página). Feita em 8 bits,
+    # no próprio array suavizado: evita cópias de 16 bits que triplicavam o pico de memória.
+    fundo = _cor_fundo(a)
+    if a.ndim == 3:
+        cv2.absdiff(a, tuple(float(v) for v in fundo) + (0.0,), dst=a)
+        r, g, b = cv2.split(a)  # maior diferença entre os canais (~6x mais rápido que a.max(axis=2))
+        dif = cv2.max(cv2.max(r, g), b)
+    else:
+        dif = cv2.absdiff(a, float(fundo))
     limiar, _ = cv2.threshold(dif, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     _, mascara = cv2.threshold(dif, float(np.clip(limiar, 12, 60)), 255, cv2.THRESH_BINARY)
     mascara = cv2.morphologyEx(mascara, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))  # remove poeira

@@ -326,16 +326,6 @@ class TelaInicial(QWidget):
             tamanho = (self.larg.value(), self.alt.value())
         arquivos = self.arquivos()
         base = arquivos[0].parent  # local sugerido para o álbum; pode ser alterado ao salvar
-        # O album.json identifica cada arquivo pelo nome: dois arquivos com o mesmo nome se confundiriam.
-        nomes = {}
-        for a in arquivos:
-            nomes.setdefault(a.name.lower(), []).append(str(a))
-        repetidos = [c for c in nomes.values() if len(c) > 1]
-        if repetidos:
-            QMessageBox.warning(self, "Nomes repetidos",
-                                "Um álbum não pode ter dois arquivos com o mesmo nome. Renomeie um deles:\n\n"
-                                + "\n\n".join("\n".join(c) for c in repetidos))
-            return
         # O nome do álbum é escolhido ao salvar; aqui só seguem o local e as opções.
         cfg = Config(None, None, tamanho, self.margem.value(), self.formato())
         self._salvar_opcoes()

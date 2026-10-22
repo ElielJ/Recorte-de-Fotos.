@@ -13,7 +13,8 @@ def pixmap_de_array(img):
         q = QImage(img.data, larg, alt, larg, QImage.Format_Grayscale8)
     else:
         q = QImage(img.data, larg, alt, 3 * larg, QImage.Format_RGB888)
-    return QPixmap.fromImage(q.copy())
+    # fromImage já copia os pixels; uma cópia extra da QImage dobraria o pico de memória (~140 MB por página).
+    return QPixmap.fromImage(q)
 
 
 def pixmap_da_previa(foto):

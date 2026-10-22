@@ -1,10 +1,12 @@
-"""Fluxo completo de um álbum: extrair as fotos dos arquivos, salvar e reabrir o trabalho.
+"""Fluxo completo de um álbum: extrair as fotos dos arquivos e salvá-las.
 
 Um álbum é uma sessão de extração: um ou mais arquivos PDF/TIFF cujas fotos vão para uma pasta
-com o nome do álbum, numeradas em sequência (Album_001.png, Album_002.png...).
+com o nome do álbum, numeradas em sequência (Album_001.png, Album_002.png...). A pasta recebe só as
+fotos; nenhum arquivo de controle é gravado.
 """
-import json
+import os
 import re
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,7 +18,8 @@ from .gravacao import salvar_jpeg, salvar_png
 from .metadados import Metadados, montar_exif, montar_xmp
 from .recorte import Recorte, cortar, previa
 
-ARQUIVO_ALBUM = "album.json"
+MAX_GRAVACOES_SIMULTANEAS = 6
+MB_POR_GRAVACAO = 250  # medido: ~150 MB por foto A4 600 dpi em andamento, com folga (48 bits usa o dobro)
 EXTENSOES_SAIDA = {"png": ".png", "jpeg": ".jpg"}
 _RESERVADOS = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
@@ -73,49 +76,29 @@ def listar_arquivos(caminhos):
     return arquivos
 
 
-def carregar_album(pasta):
-    """Lê o album.json de um álbum já salvo (ou None)."""
-    try:
-        dados = json.loads((Path(pasta) / ARQUIVO_ALBUM).read_text(encoding="utf-8"))
-        fontes = {f["arquivo"]: {"paginas": f["paginas"], "fotos": {}} for f in dados["fontes"]}
-        for d in dados["fotos"]:
-            fontes[d["arquivo"]]["fotos"].setdefault(d["pagina"] - 1, []).append(d)
-        return {"album": dados["album"], "metadados": Metadados.de_dict(dados.get("metadados")),
-                "salvos": dados.get("salvos", []), "fontes": fontes}
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
+def fotos_do_album(pasta, album):
+    """Fotos já existentes na pasta com a numeração deste álbum (Album_001.png, Album_002.jpg...)."""
+    padrao = re.compile(re.escape(nome_seguro(album)) + r"_\d{3,}\.(png|jpg)", re.IGNORECASE)
+    pasta = Path(pasta)
+    return sorted(c for c in pasta.iterdir() if padrao.fullmatch(c.name)) if pasta.is_dir() else []
 
 
-def extrair(arquivo, cfg, album_salvo=None, cancelado=lambda: False):
-    """Gera (foto, página atual, total de páginas) para cada foto encontrada no arquivo.
-
-    Se o álbum já foi salvo antes com este arquivo, reaproveita os recortes dele.
-    """
+def extrair(arquivo, cfg, cancelado=lambda: False):
+    """Gera (foto, página atual, total de páginas) para cada foto encontrada no arquivo."""
     arquivo = Path(arquivo)
-    fonte = (album_salvo or {}).get("fontes", {}).get(arquivo.name)
     with leitura.abrir(arquivo) as leitor:
         total = len(leitor)
-        if fonte and fonte["paginas"] != total:
-            fonte = None
         for i in range(total):
             if cancelado():
                 return
             pg = leitor.pagina(i)
             alt, larg = pg.imagem.shape[:2]
-            entradas = fonte["fotos"].get(i) if fonte else None
-            if entradas and all((d["largura"], d["altura"]) == (larg, alt) for d in entradas):
-                fotos = [Foto(arquivo, i, larg, alt, pg.dpi, Recorte(**d["auto"]), Recorte(**d["recorte"]),
-                              estado=d["estado"], motivo=d.get("motivo", ""), rot90=d.get("rot90", 0),
-                              excluida=d.get("excluida", False), indice=d.get("indice", 0))
-                         for d in sorted(entradas, key=lambda d: d.get("indice", 0))]
-            else:
-                fotos = []
-                for k, (r, estado, motivo) in enumerate(detectar(pg.imagem, pg.dpi, cfg.tamanho_cm,
-                                                                 cfg.margem_mm)):
-                    if pg.aviso:
-                        estado, motivo = "revisar", "; ".join(filter(None, [pg.aviso, motivo]))
-                    fotos.append(Foto(arquivo, i, larg, alt, pg.dpi, r, Recorte(**r.como_dict()),
-                                      estado=estado, motivo=motivo, indice=k))
+            fotos = []
+            for k, (r, estado, motivo) in enumerate(detectar(pg.imagem, pg.dpi, cfg.tamanho_cm, cfg.margem_mm)):
+                if pg.aviso:
+                    estado, motivo = "revisar", "; ".join(filter(None, [pg.aviso, motivo]))
+                fotos.append(Foto(arquivo, i, larg, alt, pg.dpi, r, Recorte(**r.como_dict()),
+                                  estado=estado, motivo=motivo, indice=k))
             for foto in fotos:
                 atualizar_previa(foto, pg.imagem)
                 yield foto, i + 1, total
@@ -168,78 +151,98 @@ def destinos(fotos, cfg):
     return caminhos
 
 
-def conflitos(fotos, cfg):
-    """(fotos que serão substituídas, fotos antigas do álbum que deixam de existir na nova numeração)."""
+def conflitos(fotos, cfg, anteriores=()):
+    """(fotos que serão substituídas, fotos antigas que deixam de existir na nova numeração).
+
+    anteriores: fotos gravadas antes nesta mesma sessão. Só elas podem ser apagadas: fotos que já
+    estavam na pasta (de outro álbum, por exemplo) no máximo são sobrescritas, nunca removidas.
+    """
     novos = {c for c in destinos(fotos, cfg) if c}
-    salvo = carregar_album(cfg.pasta_album)
-    ext = EXTENSOES_SAIDA[cfg.formato]
-    antigas = [cfg.pasta_album / n for n in (salvo["salvos"] if salvo else [])
-               if Path(n).suffix == ext and cfg.pasta_album / n not in novos and (cfg.pasta_album / n).exists()]
+    antigas = [c for c in anteriores if c not in novos and c.exists()]
     return sorted(c for c in novos if c.exists()), antigas
 
 
-def carregar_metadados(cfg):
-    """Metadados salvos anteriormente no album.json (ou vazios)."""
-    salvo = carregar_album(cfg.pasta_album) if cfg.pasta_album else None
-    return salvo["metadados"] if salvo else Metadados()
+def _memoria_livre_mb():
+    """RAM disponível no Windows (None em outros sistemas ou se não for possível consultar)."""
+    try:
+        import ctypes
+
+        class Estado(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        estado = Estado(dwLength=ctypes.sizeof(Estado))
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(estado)):
+            return estado.ullAvailPhys // 2 ** 20
+    except (AttributeError, OSError):
+        pass
+    return None
 
 
-def salvar(fotos, cfg, ao_progresso=lambda feitas, total: None, cancelado=lambda: False, metadados=None):
-    """Grava as fotos do álbum (PNG ou JPEG) com os metadados e o album.json. Retorna a pasta do álbum.
+def gravacoes_simultaneas():
+    """Quantas fotos gravar em paralelo: limitado pelos núcleos e pela memória livre no momento."""
+    n = min(MAX_GRAVACOES_SIMULTANEAS, max(1, (os.cpu_count() or 2) - 1))
+    livre = _memoria_livre_mb()
+    return max(1, min(n, livre // MB_POR_GRAVACAO)) if livre is not None else n
 
-    Fotos antigas deste álbum (mesmo formato) que saíram da numeração, por exclusão ou divisão de
-    recortes, são apagadas para não sobrarem arquivos desatualizados.
+
+def salvar(fotos, cfg, ao_progresso=lambda feitas, total: None, cancelado=lambda: False, metadados=None,
+           anteriores=()):
+    """Grava as fotos do álbum (PNG ou JPEG) com os metadados. Retorna a lista de arquivos gravados.
+
+    anteriores: fotos gravadas antes nesta sessão; as que saíram da numeração (por exclusão ou divisão
+    de recortes) são apagadas para não sobrarem arquivos desatualizados.
     """
-    meta = metadados or carregar_metadados(cfg)
+    meta = metadados or Metadados()
     data = meta.data()
     xmp = None if meta.vazio() else montar_xmp(meta)
-    _, antigas = conflitos(fotos, cfg)
+    _, antigas = conflitos(fotos, cfg, anteriores)
     cfg.pasta_album.mkdir(parents=True, exist_ok=True)
     caminhos = destinos(fotos, cfg)
     total = sum(c is not None for c in caminhos)
     feitas = 0
-    paginas = {}
+    pendentes = set()
+    gravados = []
     ordem = _ordenadas(fotos)
-    for arquivo in dict.fromkeys(fotos[i].arquivo for i in ordem):
-        with leitura.abrir(arquivo) as leitor:
-            paginas[arquivo] = len(leitor)
-            pg, pagina_lida = None, None
-            for i in ordem:
-                f = fotos[i]
-                if f.arquivo != arquivo or caminhos[i] is None:
-                    continue
-                if cancelado():
-                    return cfg.pasta_album
-                if f.pagina != pagina_lida:  # várias fotos da mesma página: lê a página uma vez só
-                    pg, pagina_lida = leitor.pagina(f.pagina), f.pagina
-                img = cortar(pg.imagem, f.recorte, f.rot90)
-                exif = montar_exif(meta, pg.dpi)
-                if cfg.formato == "jpeg":
-                    salvar_jpeg(caminhos[i], img, exif, data)
-                else:
-                    salvar_png(caminhos[i], img, pg.dpi, pg.icc, exif, xmp, data)
+
+    def esperar(ate):
+        """Espera até restarem no máximo 'ate' gravações em andamento (repassa erros delas)."""
+        nonlocal feitas, pendentes
+        while len(pendentes) > ate:
+            prontas, pendentes = wait(pendentes, return_when=FIRST_COMPLETED)
+            for p in prontas:
+                p.result()
                 feitas += 1
                 ao_progresso(feitas, total)
+
+    # Esta thread lê as páginas e recorta; a compressão (o gargalo, 1 núcleo por foto) roda em paralelo.
+    simultaneas = gravacoes_simultaneas()
+    with ThreadPoolExecutor(simultaneas) as gravador:
+        for arquivo in dict.fromkeys(fotos[i].arquivo for i in ordem):
+            with leitura.abrir(arquivo) as leitor:
+                pg, pagina_lida = None, None
+                for i in ordem:
+                    f = fotos[i]
+                    if f.arquivo != arquivo or caminhos[i] is None:
+                        continue
+                    if cancelado():
+                        esperar(0)
+                        return gravados
+                    if f.pagina != pagina_lida:  # várias fotos da mesma página: lê a página uma vez só
+                        pg, pagina_lida = leitor.pagina(f.pagina), f.pagina
+                    esperar(simultaneas - 1)  # limita as fotos na memória ao mesmo tempo
+                    img = cortar(pg.imagem, f.recorte, f.rot90)
+                    exif = montar_exif(meta, pg.dpi)
+                    if cfg.formato == "jpeg":
+                        tarefa = gravador.submit(salvar_jpeg, caminhos[i], img, exif, data)
+                    else:
+                        tarefa = gravador.submit(salvar_png, caminhos[i], img, pg.dpi, pg.icc, exif, xmp, data)
+                    pendentes.add(tarefa)
+                    gravados.append(caminhos[i])
+        esperar(0)
     for c in antigas:
         c.unlink(missing_ok=True)
-    _salvar_album(cfg, fotos, ordem, paginas, meta, [c.name for c in caminhos if c])
-    return cfg.pasta_album
-
-
-def _salvar_album(cfg, fotos, ordem, paginas, meta, salvos):
-    dados = {
-        "versao": 3,
-        "album": cfg.album,
-        "formato": cfg.formato,
-        "metadados": meta.como_dict(),
-        "fontes": [{"arquivo": a.name, "caminho": str(a), "paginas": n} for a, n in paginas.items()],
-        "salvos": salvos,
-        "fotos": [{
-            "arquivo": f.arquivo.name, "pagina": f.pagina + 1, "indice": f.indice,
-            "largura": f.largura, "altura": f.altura, "dpi": f.dpi,
-            "estado": f.estado, "motivo": f.motivo, "rot90": f.rot90, "excluida": f.excluida,
-            "auto": f.auto.como_dict(), "recorte": f.recorte.como_dict(),
-        } for f in (fotos[i] for i in ordem)],
-    }
-    (cfg.pasta_album / ARQUIVO_ALBUM).write_text(json.dumps(dados, indent=2, ensure_ascii=False),
-                                                 encoding="utf-8")
+    return gravados

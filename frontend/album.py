@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout
 
-from backend.processamento import carregar_album, nome_seguro, pasta_album
+from backend.processamento import fotos_do_album, nome_seguro, pasta_album
 from . import tema
 
 
@@ -16,7 +16,7 @@ class DialogoAlbum(QDialog):
         self.setMinimumWidth(600)
         self._base = Path(base)
         self._pasta_atual = pasta_atual
-        self.substituir = False  # o usuário confirmou substituir outro álbum com o mesmo nome
+        self.substituir = False  # o usuário confirmou substituir fotos de um álbum anterior com o mesmo nome
 
         titulo = QLabel("Salvar álbum")
         titulo.setObjectName("tituloGrande")
@@ -91,13 +91,13 @@ class DialogoAlbum(QDialog):
         if self._pasta_atual and pasta == self._pasta_atual:
             self.lbl_aviso.setText("Este é o álbum desta sessão: as fotos dele serão atualizadas.")
             self.lbl_aviso.show()
-        elif carregar_album(pasta):
+        elif existentes := fotos_do_album(pasta, self.nome()):
             self.substituir = True
-            self.btn_ok.setText("Substituir álbum existente")
+            self.btn_ok.setText("Substituir fotos existentes")
             tema.definir_prop(self.btn_ok, "tipo", "perigo")
-            self.lbl_aviso.setText("⚠ Já existe outro álbum com este nome neste local. Se continuar, ele será "
-                                   "<b>substituído</b> por este: as fotos dele serão sobrescritas ou apagadas. "
-                                   "Para mantê-lo, escolha outro nome.")
+            self.lbl_aviso.setText(f"⚠ Já existe um álbum com este nome neste local ({len(existentes)} foto(s)). "
+                                   "Se continuar, as fotos com a mesma numeração serão <b>substituídas</b> por estas. "
+                                   "Para manter aquele álbum, escolha outro nome.")
             self.lbl_aviso.show()
         elif pasta.exists() and any(pasta.iterdir()):
             self.lbl_aviso.setText("⚠ Já existe uma pasta com este nome. As fotos do álbum serão gravadas nela, "

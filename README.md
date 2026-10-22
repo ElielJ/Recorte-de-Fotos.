@@ -57,7 +57,8 @@ PDF/TIFF ──► extrai a página original ──► detecta as fotos ──�
 ### Requisitos
 
 - Windows 10 ou 11.
-- Internet **apenas na primeira execução**, para baixar o Python e as bibliotecas (~600 MB).
+- Internet **apenas na primeira execução**, para baixar o Python e as bibliotecas (~500 MB instalados).
+- Memória: o programa usa ~100–150 MB parado e chega a ~550 MB ao extrair páginas A4 a 600 dpi (o dobro em digitalizações de 48 bits ou páginas A3). Ao salvar, várias fotos são gravadas em paralelo (até 6, ~150 MB cada), conforme os núcleos do processador e a memória livre no momento; com pouca RAM livre, o programa grava menos fotos ao mesmo tempo. Computadores com 4 GB de RAM ou mais funcionam bem.
 
 ### Primeira execução
 
@@ -168,7 +169,7 @@ Mostra a página digitalizada inteira com **todos os recortes da página**, nume
 Clique em **Salvar todas** e **dê um nome ao álbum** (por exemplo, "Férias em Santos 1987"). A janela mostra a pasta que será criada: por padrão, na mesma pasta do primeiro arquivo da lista. **Alterar local…** permite escolher outro lugar. Ao final, o programa oferece abrir a pasta do álbum.
 
 - **Salvar de novo na mesma sessão:** a janela já vem com o nome usado antes, e as fotos do álbum são atualizadas, com confirmação se alguma for substituída ou apagada.
-- **Nome de um álbum que já existe no mesmo local:** a janela avisa, e o botão vira **"Substituir álbum existente"**. Se continuar, as fotos daquele álbum são sobrescritas ou apagadas. Para mantê-lo, escolha outro nome.
+- **Nome de um álbum que já existe no mesmo local:** a janela avisa quantas fotos ele tem, e o botão vira **"Substituir fotos existentes"**. Se continuar, as fotos com a mesma numeração são sobrescritas; as demais e qualquer outro arquivo da pasta ficam intactos. Para manter aquele álbum, escolha outro nome.
 
 ---
 
@@ -210,13 +211,11 @@ O que é gravado em cada foto:
 >
 > **Preencha antes de enviar:** há relatos de que alterar a data de fotos que já estão no Google Fotos pode não ter efeito sem apagá-las e enviá-las de novo.
 
-Os metadados ficam guardados no `album.json` e voltam quando o álbum é reaberto.
-
 ---
 
 ## Arquivos gerados
 
-Todas as fotos do álbum vão para **uma pasta com o nome do álbum**, numeradas em sequência:
+Todas as fotos do álbum vão para **uma pasta com o nome do álbum**, numeradas em sequência. A pasta recebe **só as fotos**: nenhum arquivo de controle é gravado junto.
 
 ```text
 Digitalizações/
@@ -226,17 +225,13 @@ Digitalizações/
     ├── Férias 1987_001.png
     ├── Férias 1987_002.png
     ├── …
-    ├── Férias 1987_027.png
-    └── album.json               ← recortes, edições e metadados do álbum
+    └── Férias 1987_027.png
 ```
 
 - A numeração segue a ordem dos arquivos na lista, depois a ordem das páginas e, dentro de cada página, a ordem de leitura (de cima para baixo, da esquerda para a direita).
-- Fotos excluídas não recebem número. Se você excluir, dividir ou remover fotos e salvar de novo, a numeração é refeita, e o programa avisa e **apaga as fotos antigas do álbum** que ficaram fora da nova numeração (só do mesmo formato, PNG ou JPEG).
+- Fotos excluídas não recebem número. Se você excluir, dividir ou remover fotos e salvar de novo **na mesma sessão**, a numeração é refeita, e o programa avisa e **apaga as fotos que ele mesmo gravou nessa sessão** e que ficaram fora da nova numeração. Arquivos que já estavam na pasta nunca são apagados.
 - Caracteres que o Windows não aceita em nomes de pasta (`: / \ * ? " < > |`) são trocados por espaço.
-
-O **`album.json`** guarda os arquivos de origem, o recorte automático e o editado de cada foto, giros, exclusões, estados e os metadados. Na [linha de comando](#linha-de-comando), ao processar de novo com o **mesmo nome de álbum no mesmo local**, esse trabalho é **reaproveitado** para os arquivos que já faziam parte do álbum (reconhecidos pelo nome), e só os novos passam pela detecção.
-
-> Para refazer a detecção do zero (por exemplo, depois de mudar o tamanho esperado), apague o `album.json`, ou a pasta do álbum inteira, antes de extrair de novo.
+- Os recortes e edições valem enquanto o programa está aberto. Depois de salvar, as fotos são o resultado final; para refazer um álbum, extraia os arquivos de novo.
 
 ---
 
@@ -259,7 +254,7 @@ Também é possível criar um álbum sem a interface, sem revisão manual. Todos
 | `--formato` | `png` ou `jpeg` | `png` |
 | `--sobrescrever` | Atualiza um álbum que já tem fotos salvas | Desligado |
 
-As fotos que precisariam de revisão aparecem como `REVISAR` na saída. Os metadados já gravados no `album.json` são mantidos.
+As fotos que precisariam de revisão aparecem como `REVISAR` na saída. Se a pasta do álbum já tiver fotos com os mesmos nomes, o programa só as substitui com `--sobrescrever`.
 
 ---
 
@@ -285,7 +280,7 @@ As fotos que precisariam de revisão aparecem como `REVISAR` na saída. Os metad
 | --- | --- |
 | `.bat` diz que o Python não foi encontrado após instalar | Feche a janela e abra o `.bat` novamente |
 | Erro ao instalar bibliotecas | Verifique a internet e rode o `.bat` de novo |
-| Fotos continuam em "Revisar" com o motivo de tamanho | Confira o **Tamanho da foto** na tela inicial. Se o álbum já foi salvo antes, apague o `album.json` da pasta dele |
+| Fotos continuam em "Revisar" com o motivo de tamanho | Confira o **Tamanho da foto** na tela inicial antes de extrair |
 | Todas as fotos com "foto encostada na borda" | Normal em scanners com alimentador quando o tamanho não confere: ajuste o tamanho esperado |
 | Fotos em PNG muito grandes | Escolha o formato **JPEG** ou digitalize com compressão LZW |
 | Terminal Linux/WSL não roda o programa | O ambiente é do Windows: use PowerShell (`.\.venv\Scripts\Activate.ps1`) ou o `.bat` |
@@ -299,7 +294,7 @@ As fotos que precisariam de revisão aparecem como `REVISAR` na saída. Os metad
 
 | Biblioteca | Uso |
 | --- | --- |
-| [PyMuPDF](https://pymupdf.readthedocs.io/) | Leitura de PDF e extração da imagem original |
+| [PyMuPDF](https://pymupdf.readthedocs.io/) 1.28 | Leitura de PDF e extração da imagem original. A versão 2.0 não é usada porque carrega um módulo de análise de layout com IA (onnxruntime) a cada abertura, gastando ~100 MB de RAM e 1 s sem necessidade |
 | [tifffile](https://github.com/cgohlke/tifffile) + imagecodecs | Leitura de TIFF (várias páginas, LZW, JPEG, 16 bits) |
 | [OpenCV](https://opencv.org/) | Detecção, recorte, rotação e codificação PNG/JPEG |
 | NumPy | Manipulação dos pixels |
@@ -321,7 +316,7 @@ Recorte Fotos/
 │   ├── recorte.py           # recorte/rotação a partir da página original
 │   ├── gravacao.py          # PNG (com DPI, ICC, EXIF, XMP) e JPEG
 │   ├── metadados.py         # data, local e descrição → EXIF/XMP
-│   └── processamento.py     # fluxo do álbum: extrair, salvar, album.json
+│   └── processamento.py     # fluxo do álbum: extrair, numerar e salvar
 └── frontend/                # interface gráfica (PySide6)
     ├── janela.py            # janela principal e tela inicial
     ├── revisao.py           # tela de revisão

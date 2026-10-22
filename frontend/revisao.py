@@ -35,16 +35,15 @@ class ExtracaoThread(QThread):
     progresso = Signal(int, str)  # milésimos, texto
     erro = Signal(str, str)
 
-    def __init__(self, arquivos, cfg, album_salvo):
+    def __init__(self, arquivos, cfg):
         super().__init__()
-        self.arquivos, self.cfg, self.album_salvo, self.cancelar = arquivos, cfg, album_salvo, False
+        self.arquivos, self.cfg, self.cancelar = arquivos, cfg, False
 
     def run(self):
         n = len(self.arquivos)
         for k, arquivo in enumerate(self.arquivos):
             try:
-                for foto, i, total in processamento.extrair(arquivo, self.cfg, self.album_salvo,
-                                                                 lambda: self.cancelar):
+                for foto, i, total in processamento.extrair(arquivo, self.cfg, lambda: self.cancelar):
                     self.foto_pronta.emit(foto)
                     self.progresso.emit(int(1000 * (k + i / total) / n),
                                         f"{arquivo.name}: página {i} de {total} (arquivo {k + 1} de {n})")
@@ -59,14 +58,15 @@ class SalvarThread(QThread):
     progresso = Signal(int, int)
     erro = Signal(str)
 
-    def __init__(self, fotos, cfg, metadados):
+    def __init__(self, fotos, cfg, metadados, anteriores=()):
         super().__init__()
-        self.fotos, self.cfg, self.metadados, self.cancelar, self.pasta = fotos, cfg, metadados, False, None
+        self.fotos, self.cfg, self.metadados, self.anteriores = fotos, cfg, metadados, anteriores
+        self.cancelar, self.gravados = False, []
 
     def run(self):
         try:
-            self.pasta = processamento.salvar(self.fotos, self.cfg, self.progresso.emit, lambda: self.cancelar,
-                                               self.metadados)
+            self.gravados = processamento.salvar(self.fotos, self.cfg, self.progresso.emit, lambda: self.cancelar,
+                                                 self.metadados, self.anteriores)
         except Exception as e:
             traceback.print_exc()
             self.erro.emit(str(e))
@@ -601,6 +601,7 @@ class TelaRevisao(QWidget):
     def iniciar(self, arquivos, cfg, base):
         """base: onde a pasta do álbum será criada (o nome é escolhido ao salvar)."""
         self.fotos, self.cfg, self.base, self._arquivos = [], cfg, base, arquivos
+        self._gravados = []  # fotos gravadas nesta sessão (para limpar as que saírem da numeração)
         self.metadados = Metadados()
         self.lbl_album.setText("Álbum novo: o nome é definido ao salvar")
         self.lbl_album.setToolTip("")
@@ -612,7 +613,7 @@ class TelaRevisao(QWidget):
         self.barra.setValue(0)
         self.lbl_progresso.setText("Iniciando…")
         self.faixa_progresso.show()
-        self.thread = ExtracaoThread(arquivos, cfg, None)
+        self.thread = ExtracaoThread(arquivos, cfg)
         self.thread.foto_pronta.connect(self._adicionar_foto)
         self.thread.progresso.connect(lambda v, t: (self.barra.setValue(v), self.lbl_progresso.setText(t)))
         self.thread.erro.connect(lambda arq, msg: self._erros.append(f"{arq}: {msg}"))
@@ -930,10 +931,12 @@ class TelaRevisao(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
         editor.setWindowState(Qt.WindowMaximized)
-        if editor.exec() != QDialog.Accepted:
-            return
+        aceito = editor.exec() == QDialog.Accepted
         resultado, indice_ativo = editor.resultado()
-        self._aplicar_edicao(foto, editaveis, resultado, indice_ativo, pagina.imagem)
+        # Sem isto o editor (e a página inteira, ~140 MB) ficaria preso à tela até o programa fechar.
+        editor.deleteLater()
+        if aceito:
+            self._aplicar_edicao(foto, editaveis, resultado, indice_ativo, pagina.imagem)
 
     def _aplicar_edicao(self, modelo, editaveis, resultado, indice_ativo, imagem):
         """Aplica na lista o que foi feito no editor: recortes alterados, novos e removidos."""
@@ -994,8 +997,10 @@ class TelaRevisao(QWidget):
         self.cfg.album, self.cfg.pasta_album, self.base = nome.nome(), nome.pasta(), nome.pasta().parent
         self.lbl_album.setText(f"Álbum: {self.cfg.album}")
         self.lbl_album.setToolTip(str(self.cfg.pasta_album))
-        existentes, antigas = processamento.conflitos(self.fotos, self.cfg)
-        # Substituir outro álbum já foi confirmado na janela do nome; só pergunta nos demais casos.
+        # Só as fotos que esta sessão gravou na mesma pasta podem ser apagadas na renumeração.
+        anteriores = [c for c in self._gravados if c.parent == self.cfg.pasta_album]
+        existentes, antigas = processamento.conflitos(self.fotos, self.cfg, anteriores)
+        # Substituir fotos que já estavam na pasta foi confirmado na janela do nome; só pergunta nos demais casos.
         if (existentes or antigas) and not nome.substituir:
             texto = f"O álbum “{self.cfg.album}” já tem fotos salvas.\n\n"
             if existentes:
@@ -1013,7 +1018,7 @@ class TelaRevisao(QWidget):
         dialogo.setMinimumDuration(0)
         dialogo.setValue(0)
         erros = []
-        t = SalvarThread(self.fotos, self.cfg, self.metadados)
+        t = SalvarThread(self.fotos, self.cfg, self.metadados, anteriores)
         t.progresso.connect(lambda feitas, _: dialogo.setValue(feitas))
         t.erro.connect(erros.append)
         dialogo.canceled.connect(lambda: setattr(t, "cancelar", True))
@@ -1021,6 +1026,7 @@ class TelaRevisao(QWidget):
         t.start()
         dialogo.exec()
         t.wait()
+        self._gravados = list(dict.fromkeys(t.gravados + ([] if not t.cancelar and not erros else self._gravados)))
         if erros:
             QMessageBox.critical(self, "Erro ao salvar", "\n".join(erros))
             return
@@ -1030,10 +1036,10 @@ class TelaRevisao(QWidget):
             return
         self.alterado = False
         caixa = QMessageBox(QMessageBox.Information, "Álbum salvo",
-                            f"Álbum “{self.cfg.album}”: {total} foto(s) salvas em {formato} em:\n\n{t.pasta}",
-                            parent=self)
+                            f"Álbum “{self.cfg.album}”: {total} foto(s) salvas em {formato} em:\n\n"
+                            f"{self.cfg.pasta_album}", parent=self)
         abrir = caixa.addButton("Abrir pasta do álbum", QMessageBox.AcceptRole)
         caixa.addButton("Fechar", QMessageBox.RejectRole)
         caixa.exec()
         if caixa.clickedButton() is abrir:
-            os.startfile(t.pasta)
+            os.startfile(self.cfg.pasta_album)

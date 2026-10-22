@@ -9,8 +9,7 @@ import sys
 
 
 def linha_de_comando(args):
-    from backend.processamento import (Config, carregar_album, conflitos, extrair, listar_arquivos,
-                                       nome_seguro, pasta_album, salvar)
+    from backend.processamento import Config, conflitos, extrair, listar_arquivos, nome_seguro, pasta_album, salvar
 
     p = argparse.ArgumentParser(description="Extrai e recorta as fotos de arquivos PDF/TIFF digitalizados "
                                             "e grava tudo num álbum (uma pasta com o nome do álbum).")
@@ -35,20 +34,19 @@ def linha_de_comando(args):
     tamanho = None if a.tamanho == "livre" else tuple(float(x) for x in a.tamanho.lower().split("x"))
     pasta = pasta_album(a.saida or arquivos[0].parent, nome)
     cfg = Config(nome, pasta, tamanho, a.margem, a.formato)
-    salvo = carregar_album(pasta)
 
     print(f"Álbum \"{nome}\" em {pasta}")
     fotos = []
     for arquivo in arquivos:
         print(f"{arquivo.name}:")
-        for foto, i, total in extrair(arquivo, cfg, salvo):
+        for foto, i, total in extrair(arquivo, cfg):
             fotos.append(foto)
             aviso = f"  REVISAR: {foto.motivo}" if foto.estado == "revisar" else ""
             print(f"  página {i}/{total}, foto {foto.indice + 1}{aviso}")
-    existentes, antigas = conflitos(fotos, cfg)
-    if (existentes or antigas) and not a.sobrescrever:
-        print(f"O álbum já tem {len(existentes) + len(antigas)} foto(s) que seriam substituídas ou removidas; "
-              f"use --sobrescrever para continuar.")
+    existentes, _ = conflitos(fotos, cfg)
+    if existentes and not a.sobrescrever:
+        print(f"A pasta do álbum já tem {len(existentes)} foto(s) com os mesmos nomes; "
+              f"use --sobrescrever para substituí-las.")
         return 1
     salvar(fotos, cfg)
     print(f"{sum(not f.excluida for f in fotos)} foto(s) salvas em {pasta}")

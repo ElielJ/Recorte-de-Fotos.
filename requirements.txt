@@ -1,4 +1,4 @@
-pymupdf==2.0
+pymupdf==1.28.2
 opencv-python-headless==5.0.0.93
 numpy==2.5.4
 tifffile==2026.10.15

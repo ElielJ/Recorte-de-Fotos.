@@ -97,13 +97,18 @@ class LeitorPdf(_Leitor):
         return self._doc.page_count
 
     def pagina(self, i):
-        pg = self._doc[i]
-        img = self._imagem_embutida(pg)
-        if img is None:
-            # Página sem uma imagem única do scanner: renderiza em alta resolução.
-            pix = pg.get_pixmap(dpi=600, colorspace=pymupdf.csRGB, alpha=False)
-            return Pagina(_array(pix), 600.0, aviso="página renderizada a 600 dpi (sem imagem original única)")
-        return Pagina(img, float(round(img.shape[1] / (pg.rect.width / 72))))
+        try:
+            pg = self._doc[i]
+            img = self._imagem_embutida(pg)
+            if img is None:
+                # Página sem uma imagem única do scanner: renderiza em alta resolução.
+                pix = pg.get_pixmap(dpi=600, colorspace=pymupdf.csRGB, alpha=False)
+                return Pagina(_array(pix), 600.0, aviso="página renderizada a 600 dpi (sem imagem original única)")
+            return Pagina(img, float(round(img.shape[1] / (pg.rect.width / 72))))
+        finally:
+            # O MuPDF guarda as imagens decodificadas num cache (até ~256 MB); como a página já foi
+            # copiada para o NumPy, o cache só ocuparia memória.
+            pymupdf.TOOLS.store_shrink(100)
 
     def close(self):
         self._doc.close()
@@ -111,8 +116,14 @@ class LeitorPdf(_Leitor):
     def _imagem_embutida(self, pg):
         """Extrai os pixels originais gravados pelo scanner, sem reamostragem."""
         area_pagina = pg.rect.width * pg.rect.height
+
+        def posicoes(info):
+            # get_image_bbox é instantâneo; get_image_rects (reserva) calcula um hash da imagem inteira (~0,5 s).
+            r = pg.get_image_bbox(info)
+            return [r] if r.is_valid and not r.is_infinite and not r.is_empty else pg.get_image_rects(info[0])
+
         grandes = {info[0] for info in pg.get_images(full=True)
-                   if any(r.width * r.height >= 0.8 * area_pagina for r in pg.get_image_rects(info[0]))}
+                   if any(r.width * r.height >= 0.8 * area_pagina for r in posicoes(info))}
         if len(grandes) != 1:
             return None
         pix = pymupdf.Pixmap(self._doc, grandes.pop())
